@@ -32,7 +32,15 @@ file(GLOB CPP_SOURCES
 )
 
 # Create main executable
-add_executable(QuantCore ${CPP_SOURCES})
+add_executable(QuantCore ${CPP_SOURCES}
+        cpp/backtesting/event.h
+        cpp/backtesting/event_queue.h
+        cpp/backtesting/market_data_event.h
+        cpp/backtesting/signal_event.h
+        cpp/backtesting/order_event.h
+        cpp/backtesting/fill_event.h
+        cpp/backtesting/bar_data.h
+        cpp/backtesting/data_loader.h)
 
 # Link libraries if needed
 # target_link_libraries(QuantCore pthread)
