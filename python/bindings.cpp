@@ -1,12 +1,303 @@
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/functional.h>
+#include <pybind11/chrono.h>
+
+#include "backtesting/backtest_engine.h"
+#include "backtesting/data_loader.h"
+#include "backtesting/bar_data.h"
+#include "backtesting/market_data_event.h"
+#include "backtesting/signal_event.h"
+#include "backtesting/order_event.h"
+#include "backtesting/fill_event.h"
+#include "backtesting/strategy.h"
+#include "strategies/buy_and_hold.h"
+#include "strategies/sma_crossover.h"
+#include "strategies/mean_reversion.h"
+#include "Execution.h"
 
 namespace py = pybind11;
+using namespace quantcore;
+
+// Python wrapper for Strategy to allow Python subclassing
+class PyStrategy : public Strategy {
+public:
+    using Strategy::Strategy;
+
+    void on_data(const MarketDataEvent& event) override {
+        PYBIND11_OVERRIDE_PURE(
+            void,
+            Strategy,
+            on_data,
+            event
+        );
+    }
+
+    void on_fill(const FillEvent& event) override {
+        PYBIND11_OVERRIDE(
+            void,
+            Strategy,
+            on_fill,
+            event
+        );
+    }
+
+    void reset() override {
+        PYBIND11_OVERRIDE(
+            void,
+            Strategy,
+            reset
+        );
+    }
+};
 
 PYBIND11_MODULE(_core, m) {
     m.doc() = "QuantCore C++ backtesting engine";
 
-    // Test function
+    // ============================================================================
+    // ENUMS
+    // ============================================================================
+
+    py::enum_<SignalType>(m, "SignalType")
+        .value("BUY", SignalType::BUY)
+        .value("SELL", SignalType::SELL)
+        .value("HOLD", SignalType::HOLD)
+        .export_values();
+
+    py::enum_<Side>(m, "Side")
+        .value("BUY", Side::Buy)
+        .value("SELL", Side::Sell)
+        .export_values();
+
+    py::enum_<OrderType>(m, "OrderType")
+        .value("GOOD_TILL_CANCEL", OrderType::GoodTillCancel)
+        .value("IMMEDIATE_OR_CANCEL", OrderType::ImmediateOrCancel)
+        .value("MARKET", OrderType::Market)
+        .value("GOOD_FOR_DAY", OrderType::GoodForDay)
+        .value("FILL_OR_KILL", OrderType::FillOrKill)
+        .export_values();
+
+    // ============================================================================
+    // BAR DATA
+    // ============================================================================
+
+    py::class_<BarData>(m, "BarData")
+        .def(py::init<>())
+        .def(py::init<const std::string&, int64_t, double, double, double, double, double>(),
+             py::arg("symbol"),
+             py::arg("timestamp_ns"),
+             py::arg("open"),
+             py::arg("high"),
+             py::arg("low"),
+             py::arg("close"),
+             py::arg("volume"))
+        .def_readwrite("symbol", &BarData::symbol)
+        .def_readwrite("timestamp_ns", &BarData::timestamp_ns)
+        .def_readwrite("open", &BarData::open)
+        .def_readwrite("high", &BarData::high)
+        .def_readwrite("low", &BarData::low)
+        .def_readwrite("close", &BarData::close)
+        .def_readwrite("volume", &BarData::volume)
+        .def("typical_price", &BarData::typical_price)
+        .def("range", &BarData::range)
+        .def("is_bullish", &BarData::is_bullish)
+        .def("is_bearish", &BarData::is_bearish)
+        .def("__repr__", [](const BarData& bar) {
+            return "<BarData " + bar.symbol + " @ " + std::to_string(bar.close) + ">";
+        });
+
+    // ============================================================================
+    // DATA LOADER
+    // ============================================================================
+
+    py::class_<CSVDataLoader>(m, "CSVDataLoader")
+        .def_static("load", &CSVDataLoader::load,
+                   py::arg("filepath"),
+                   py::arg("symbol") = "",
+                   py::arg("has_header") = true,
+                   "Load OHLCV data from CSV file");
+
+    // ============================================================================
+    // EVENTS
+    // ============================================================================
+
+    py::class_<MarketDataEvent, std::shared_ptr<MarketDataEvent>>(m, "MarketDataEvent")
+        .def(py::init<const std::string&, int64_t, double, double, double, double, double>(),
+             py::arg("symbol"),
+             py::arg("timestamp_ns"),
+             py::arg("open"),
+             py::arg("high"),
+             py::arg("low"),
+             py::arg("close"),
+             py::arg("volume"))
+        .def("get_symbol", &MarketDataEvent::get_symbol)
+        .def("get_timestamp", &MarketDataEvent::get_timestamp)
+        .def("get_open", &MarketDataEvent::get_open)
+        .def("get_high", &MarketDataEvent::get_high)
+        .def("get_low", &MarketDataEvent::get_low)
+        .def("get_close", &MarketDataEvent::get_close)
+        .def("get_volume", &MarketDataEvent::get_volume)
+        .def("get_price", &MarketDataEvent::get_price)
+        .def("__repr__", [](const MarketDataEvent& event) {
+            return event.to_string();
+        });
+
+    py::class_<SignalEvent, std::shared_ptr<SignalEvent>>(m, "SignalEvent")
+        .def(py::init<const std::string&, int64_t, SignalType, double, const std::string&>(),
+             py::arg("symbol"),
+             py::arg("timestamp_ns"),
+             py::arg("signal_type"),
+             py::arg("strength") = 1.0,
+             py::arg("strategy_id") = "default")
+        .def("get_symbol", &SignalEvent::get_symbol)
+        .def("get_timestamp", &SignalEvent::get_timestamp)
+        .def("get_signal_type", &SignalEvent::get_signal_type)
+        .def("get_strength", &SignalEvent::get_strength)
+        .def("get_strategy_id", &SignalEvent::get_strategy_id)
+        .def("__repr__", [](const SignalEvent& event) {
+            return event.to_string();
+        });
+
+    py::class_<FillEvent, std::shared_ptr<FillEvent>>(m, "FillEvent")
+        .def(py::init<const std::string&, int64_t, uint64_t, Side, double, double, double>(),
+             py::arg("symbol"),
+             py::arg("timestamp_ns"),
+             py::arg("order_id"),
+             py::arg("side"),
+             py::arg("quantity"),
+             py::arg("price"),
+             py::arg("commission") = 0.0)
+        .def("get_symbol", &FillEvent::get_symbol)
+        .def("get_timestamp", &FillEvent::get_timestamp)
+        .def("get_order_id", &FillEvent::get_order_id)
+        .def("get_side", &FillEvent::get_side)
+        .def("get_quantity", &FillEvent::get_quantity)
+        .def("get_price", &FillEvent::get_price)
+        .def("get_commission", &FillEvent::get_commission)
+        .def("get_total_cost", &FillEvent::get_total_cost)
+        .def("__repr__", [](const FillEvent& event) {
+            return event.to_string();
+        });
+
+    // ============================================================================
+    // EXECUTION ENGINE
+    // ============================================================================
+
+    py::class_<ExecutionConfig>(m, "ExecutionConfig")
+        .def(py::init<>())
+        .def_readwrite("maker_fee", &ExecutionConfig::maker_fee)
+        .def_readwrite("taker_fee", &ExecutionConfig::taker_fee)
+        .def_readwrite("latency_ns", &ExecutionConfig::latency_ns)
+        .def_readwrite("slippage_pct", &ExecutionConfig::slippage_pct);
+
+    py::class_<ExecutionEngine, std::shared_ptr<ExecutionEngine>>(m, "ExecutionEngine")
+        .def(py::init<const std::string&, ExecutionConfig>(),
+             py::arg("symbol") = "DEFAULT",
+             py::arg("config") = ExecutionConfig())
+        .def("get_position", &ExecutionEngine::get_position,
+             "Get current position for the symbol")
+        .def("get_average_price", &ExecutionEngine::get_average_price,
+             "Get average entry price")
+        .def("get_realized_pnl", &ExecutionEngine::get_realized_pnl,
+             "Get realized PnL")
+        .def("get_unrealized_pnl", &ExecutionEngine::get_unrealized_pnl,
+             "Get unrealized PnL based on current market price")
+        .def("get_total_pnl", &ExecutionEngine::get_total_pnl,
+             "Get total PnL (realized + unrealized)")
+        .def("get_total_fees", &ExecutionEngine::get_total_fees,
+             "Get total fees paid")
+        .def("get_best_bid", &ExecutionEngine::get_best_bid,
+             "Get best bid price")
+        .def("get_best_ask", &ExecutionEngine::get_best_ask,
+             "Get best ask price")
+        .def("get_mid_price", &ExecutionEngine::get_mid_price,
+             "Get mid price (average of best bid and ask)")
+        .def("reset", &ExecutionEngine::reset,
+             "Reset all state for new backtest run");
+
+    // ============================================================================
+    // STRATEGY
+    // ============================================================================
+
+    py::class_<Strategy, PyStrategy, std::shared_ptr<Strategy>>(m, "Strategy")
+        .def(py::init<const std::string&>(),
+             py::arg("name") = "Strategy")
+        .def("on_data", &Strategy::on_data,
+             "Called on each market data update")
+        .def("on_fill", &Strategy::on_fill,
+             "Called when an order is filled")
+        .def("get_name", &Strategy::get_name,
+             "Get strategy name")
+        .def("get_signals", &Strategy::get_signals,
+             "Get and clear pending signals")
+        .def("has_signals", &Strategy::has_signals,
+             "Check if strategy has pending signals")
+        .def("reset", &Strategy::reset,
+             "Reset strategy state");
+
+    // ============================================================================
+    // BUILT-IN STRATEGIES
+    // ============================================================================
+
+    py::class_<BuyAndHold, Strategy, std::shared_ptr<BuyAndHold>>(m, "BuyAndHold")
+        .def(py::init<>(),
+             "Simple buy and hold strategy - buys once on first bar");
+
+    py::class_<SMACrossover, Strategy, std::shared_ptr<SMACrossover>>(m, "SMACrossover")
+        .def(py::init<size_t, size_t>(),
+             py::arg("fast_period") = 50,
+             py::arg("slow_period") = 200,
+             "SMA crossover strategy - buy when fast > slow, sell when fast < slow");
+
+    py::class_<MeanReversion, Strategy, std::shared_ptr<MeanReversion>>(m, "MeanReversion")
+        .def(py::init<size_t, double, double>(),
+             py::arg("lookback") = 20,
+             py::arg("entry_threshold") = 1.5,
+             py::arg("exit_threshold") = 0.5,
+             "Mean reversion strategy - trade based on z-score")
+        .def("get_signal_count", &MeanReversion::get_signal_count,
+             "Get number of signals generated");
+
+    // ============================================================================
+    // BACKTEST ENGINE
+    // ============================================================================
+
+    py::class_<BacktestEngine>(m, "BacktestEngine")
+        .def(py::init<double>(),
+             py::arg("initial_capital") = 100000.0,
+             "Create backtest engine with initial capital")
+        .def("add_data", &BacktestEngine::add_data,
+             py::arg("symbol"),
+             py::arg("bars"),
+             "Add market data for a symbol")
+        .def("set_strategy", &BacktestEngine::set_strategy,
+             py::arg("strategy"),
+             "Set the trading strategy")
+        .def("run", &BacktestEngine::run,
+             "Run the backtest and return final portfolio value")
+        .def("get_total_pnl", &BacktestEngine::get_total_pnl,
+             "Get total PnL across all symbols")
+        .def("get_total_fees", &BacktestEngine::get_total_fees,
+             "Get total fees paid across all symbols")
+        .def("get_execution_engine", &BacktestEngine::get_execution_engine,
+             py::arg("symbol"),
+             "Get execution engine for a symbol (for inspection)");
+
+    // ============================================================================
+    // UTILITY FUNCTIONS
+    // ============================================================================
+
     m.def("hello", []() {
         return "Hello from QuantCore C++!";
     }, "A simple test function");
+
+    m.def("version", []() {
+        return "0.1.0";
+    }, "Get QuantCore version");
+
+    // ============================================================================
+    // MODULE METADATA
+    // ============================================================================
+
+    m.attr("__version__") = "0.1.0";
 }

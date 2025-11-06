@@ -3,7 +3,28 @@ project(quantcore_python)
 
 set(CMAKE_CXX_STANDARD 20)
 
-find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+find_package(Python3 COMPONENTS Interpreter Development.Module)
+
+if(NOT Python3_FOUND)
+    # Fallback for conda environments
+    message(STATUS "Standard FindPython3 failed, trying fallback method...")
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} -c "import sys; print(sys.prefix)"
+        OUTPUT_VARIABLE PYTHON_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_path('include'))"
+        OUTPUT_VARIABLE Python3_INCLUDE_DIRS
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    message(STATUS "Python prefix: ${PYTHON_PREFIX}")
+    message(STATUS "Python include: ${Python3_INCLUDE_DIRS}")
+
+    set(Python3_FOUND TRUE)
+endif()
 
 # Find pybind11
 execute_process(
