@@ -9,6 +9,7 @@
 #include <string>
 #include <memory>
 #include <chrono>
+#include <unordered_set>
 
 namespace quantcore {
 
@@ -31,11 +32,11 @@ struct ExecutionConfig {
  */
 class ExecutionEngine {
 public:
-    ExecutionEngine(const std::string& symbol = "DEFAULT", 
+    ExecutionEngine(const std::string& symbol = "DEFAULT",
                    ExecutionConfig config = ExecutionConfig())
         : symbol_(symbol)
         , config_(config)
-        , orderbook_() 
+        , orderbook_()
         , realized_pnl_(0.0)
         , unrealized_pnl_(0.0)
     {
@@ -44,31 +45,29 @@ public:
     // execute order through orderbook
     // returns trades tht occurred
     Trades execute_order(OrderPointer order) {
-        // Simulate latency
-        // std::this_thread::sleep_for(std::chrono::nanoseconds(config_.latency_ns));
-        // TODO: look at ts^^
+        orders_owned_.insert(order->GetOrderId());
 
         auto trades = orderbook_.AddOrder(order);
-        
-        // Update positions and PnL for each trade
+
         for (const auto& trade : trades) {
             update_position(trade);
         }
-        
+
         return trades;
     }
 
     void cancel_order(OrderId order_id) {
+        orders_owned_.erase(order_id);
         orderbook_.CancelOrder(order_id);
     }
 
     Trades modify_order(const OrderModify& modify) {
         auto trades = orderbook_.MatchOrder(modify);
-        
+
         for (const auto& trade : trades) {
             update_position(trade);
         }
-        
+
         return trades;
     }
 
@@ -88,19 +87,31 @@ public:
     }
 
     double get_unrealized_pnl() const {
-        return unrealized_pnl_;
+        double position = get_position();
+        if (position == 0.0) return 0.0;
+
+        double current_price = get_mid_price();
+        double avg_price = get_average_price();
+
+        if (current_price == 0.0 || avg_price == 0.0) return 0.0;
+
+        return position * (current_price - avg_price);
     }
     
     //realized + unrealized
     double get_total_pnl() const {
-        return realized_pnl_ + unrealized_pnl_;
+        return realized_pnl_ + get_unrealized_pnl();
     }
 
     double get_total_fees() const {
         return total_fees_;
     }
-    
+
     // maybe for debugging later?
+    Orderbook& get_orderbook() {
+        return orderbook_;
+    }
+
     const Orderbook& get_orderbook() const {
         return orderbook_;
     }
@@ -129,6 +140,7 @@ public:
     void reset() {
         positions_.clear();
         avg_prices_.clear();
+        orders_owned_.clear();
         realized_pnl_ = 0.0;
         unrealized_pnl_ = 0.0;
         total_fees_ = 0.0;
@@ -142,7 +154,7 @@ public:
         double total_fees = 0.0;
         size_t orders_in_book = 0;
     };
-    
+
     Stats get_stats() const {
         Stats stats;
         stats.total_fees = total_fees_;
@@ -150,7 +162,7 @@ public:
         // Could add more stats tracking if needed
         return stats;
     }
-    
+
 private:
     std::string symbol_;
     ExecutionConfig config_;
@@ -158,16 +170,13 @@ private:
     
     // Position tracking, symbol & quantity
     std::map<std::string, double> positions_;
-    
-    // Average entry prices, symbol & avg price
     std::map<std::string, double> avg_prices_;
-    
+    std::unordered_set<OrderId> orders_owned_;
+
     double realized_pnl_;
     double unrealized_pnl_;
     double total_fees_ = 0.0;
     
-
-    //Update position and PnL
     void update_position(const Trade& trade) {
         const auto& bid_trade = trade.GetBidTrade();
         const auto& ask_trade = trade.GetAskTrade();
@@ -175,26 +184,80 @@ private:
         // cnvert cents to dollar
         double quantity = static_cast<double>(bid_trade.quantity_);
         double price = static_cast<double>(bid_trade.price_) / 100.0;
-        
-        // fees
-        double bid_fee = calculate_fee(price, quantity, false); // Taker
-        double ask_fee = calculate_fee(price, quantity, true);  // Maker
-        double total_trade_fees = bid_fee + ask_fee;
 
-        total_fees_ += total_trade_fees;
-        
-        // Update realized PnL
-        realized_pnl_ -= total_trade_fees;
-        
-        // Update position tracking
-        // Simplified, just track net position
-        // In real system, would track each fill separately for FIFO/LIFO
+        bool we_are_buyer = orders_owned_.contains(bid_trade.orderId_);
+        bool we_are_seller = orders_owned_.contains(ask_trade.orderId_);
+
+        if (!we_are_buyer && !we_are_seller) {
+            return;
+        }
+
         double current_position = get_position();
-        double new_position = current_position; // Will be updated based on trade
-        
-        // This is simplified, in reality you'd need to know which side YOU are on
-        // For now, just tracking that a trade happened
-        positions_[symbol_] = new_position;
+        double current_avg_price = get_average_price();
+
+        if (we_are_buyer) {
+            double fee = calculate_fee(price, quantity, false);
+            total_fees_ += fee;
+            realized_pnl_ -= fee;
+
+            orders_owned_.erase(bid_trade.orderId_);
+
+            if (current_position < 0) {
+                double cover_qty = std::min(quantity, -current_position);
+                realized_pnl_ += cover_qty * (current_avg_price - price);
+
+                if (quantity > -current_position) {
+                    double new_qty = quantity + current_position;
+                    positions_[symbol_] = new_qty;
+                    avg_prices_[symbol_] = price;
+                } else {
+                    positions_[symbol_] = current_position + quantity;
+                    if (positions_[symbol_] == 0.0) {
+                        avg_prices_[symbol_] = 0.0;
+                    }
+                }
+            } else {
+                if (current_position == 0.0) {
+                    avg_prices_[symbol_] = price;
+                } else {
+                    double total_cost = current_position * current_avg_price + quantity * price;
+                    avg_prices_[symbol_] = total_cost / (current_position + quantity);
+                }
+                positions_[symbol_] = current_position + quantity;
+            }
+        }
+
+        if (we_are_seller) {
+            double fee = calculate_fee(price, quantity, true);
+            total_fees_ += fee;
+            realized_pnl_ -= fee;
+
+            orders_owned_.erase(ask_trade.orderId_);
+
+            if (current_position > 0) {
+                double sell_qty = std::min(quantity, current_position);
+                realized_pnl_ += sell_qty * (price - current_avg_price);
+
+                if (quantity > current_position) {
+                    double new_qty = -(quantity - current_position);
+                    positions_[symbol_] = new_qty;
+                    avg_prices_[symbol_] = price;
+                } else {
+                    positions_[symbol_] = current_position - quantity;
+                    if (positions_[symbol_] == 0.0) {
+                        avg_prices_[symbol_] = 0.0;
+                    }
+                }
+            } else {
+                if (current_position == 0.0) {
+                    avg_prices_[symbol_] = price;
+                } else {
+                    double total_cost = -current_position * current_avg_price + quantity * price;
+                    avg_prices_[symbol_] = total_cost / std::abs(current_position - quantity);
+                }
+                positions_[symbol_] = current_position - quantity;
+            }
+        }
     }
 
     double calculate_fee(double price, double quantity, bool is_maker) {
@@ -203,10 +266,7 @@ private:
         return notional * fee_rate;
     }
 
-    //future enhancement
     double calculate_slippage(double price, double quantity) {
-        // Simple percentage-based slippage model
-        // In reality would be based on orderbook depth
         return price * quantity * config_.slippage_pct;
     }
 };
