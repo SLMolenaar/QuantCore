@@ -154,34 +154,40 @@ private:
         std::string symbol = md_event->get_symbol();
         last_prices_[symbol] = md_event->get_close();
 
-        if (market_makers_.contains(symbol)) {
-            market_makers_[symbol]->update_quotes(*execution_engines_[symbol], *md_event);
+        auto mm_it = market_makers_.find(symbol);
+        auto ee_it = execution_engines_.find(symbol);
+
+        if (mm_it != market_makers_.end() && ee_it != execution_engines_.end()) {
+            mm_it->second->update_quotes(*ee_it->second, *md_event);
         }
 
         strategy_->on_data(*md_event);
-        
+
         // Check if strategy generated any signals
         auto signals = strategy_->get_signals();
-        for (auto& signal : signals) {
-            // Use the market data timestamp for the signal
-            signal = std::make_shared<SignalEvent>(
-                signal->get_symbol(),
-                md_event->get_timestamp(),
-                signal->get_signal_type(),
-                signal->get_strength(),
-                signal->get_strategy_id()
-            );
+        for (const auto& signal : signals) {
             event_queue_.push(signal);
         }
     }
-    
+
     // convert signal event to order
     void handle_signal(EventPtr event) {
         auto signal = std::static_pointer_cast<SignalEvent>(event);
 
-        double current_price = last_prices_[signal->get_symbol()];
+        auto price_it = last_prices_.find(signal->get_symbol());
+        if (price_it == last_prices_.end()) {
+            return;
+        }
+
+        double current_price = price_it->second;
         if (current_price == 0.0) {
             return;
+        }
+
+        auto mm_it = market_makers_.find(signal->get_symbol());
+        double spread_pct = 0.0001; // Default
+        if (mm_it != market_makers_.end()) {
+            spread_pct = mm_it->second->get_spread();
         }
 
         if (signal->get_signal_type() == SignalType::BUY) {
@@ -191,7 +197,7 @@ private:
                 Side::Buy,
                 OrderType::GoodTillCancel,
                 100.0,
-                current_price * 1.001
+                current_price * (1.0 + spread_pct / 2.0)
             );
             order_event->set_order_id(next_order_id_++);
             event_queue_.push(order_event);
@@ -203,7 +209,7 @@ private:
                 Side::Sell,
                 OrderType::GoodTillCancel,
                 100.0,
-                current_price * 0.999
+                current_price * (1.0 - spread_pct / 2.0)
             );
             order_event->set_order_id(next_order_id_++);
             event_queue_.push(order_event);
@@ -213,11 +219,13 @@ private:
     //execute through orderbook
     void handle_order(EventPtr event) {
         auto order_event = std::static_pointer_cast<OrderEvent>(event);
-        auto engine = execution_engines_[order_event->get_symbol()];
 
-        if (!engine) {
+        auto it = execution_engines_.find(order_event->get_symbol());
+        if (it == execution_engines_.end()) {
             return;
         }
+
+        auto engine = it->second;
 
         if (order_event->is_cancel()) {
             engine->cancel_order(order_event->get_order_id());
@@ -236,7 +244,7 @@ private:
         );
 
         auto trades = engine->execute_order(order);
-        
+
         // Generate fill events for each trade
         for (const auto& trade : trades) {
             auto fill_event = std::make_shared<FillEvent>(
@@ -251,22 +259,16 @@ private:
             event_queue_.push(fill_event);
         }
     }
-    
+
     //update positions
     void handle_fill(EventPtr event) {
         auto fill = std::static_pointer_cast<FillEvent>(event);
-        
-        // Update strategy's position tracking
-        double current_pos = strategy_->get_position(fill->get_symbol());
-        double new_pos = current_pos;
 
-        if (fill->get_side() == Side::Buy) {
-            new_pos += fill->get_quantity();
-        } else {
-            new_pos -= fill->get_quantity();
+        auto ee_it = execution_engines_.find(fill->get_symbol());
+        if (ee_it != execution_engines_.end()) {
+            double engine_position = ee_it->second->get_position();
+            strategy_->set_position(fill->get_symbol(), engine_position);
         }
-
-        strategy_->set_position(fill->get_symbol(), new_pos);
         
         // Notify strategy
         strategy_->on_fill(*fill);

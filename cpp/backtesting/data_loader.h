@@ -5,6 +5,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
+#include <iostream>
 
 namespace quantcore {
     /**
@@ -22,21 +23,37 @@ namespace quantcore {
 
             BarSeries bars;
             std::string line;
+            size_t line_number = 0;
+            size_t skipped_lines = 0;
 
             // Skip header if present
             if (has_header) {
                 std::getline(file, line);
+                line_number++;
             }
 
             while (std::getline(file, line)) {
+                line_number++;
                 if (line.empty()) continue;
 
                 try {
                     auto bar = parse_line(line, symbol);
                     bars.push_back(bar);
                 } catch (const std::exception& e) {
+                    std::cerr << "Warning: Skipping line " << line_number
+                              << " in " << filepath << ": " << e.what() << "\n";
+                    skipped_lines++;
                     continue;
                 }
+            }
+
+            if (skipped_lines > 0) {
+                std::cerr << "Warning: Skipped " << skipped_lines
+                          << " invalid lines out of " << line_number << " total lines\n";
+            }
+
+            if (bars.empty()) {
+                throw std::runtime_error("No valid data loaded from file: " + filepath);
             }
 
             // Sort by timestamp (just in case)

@@ -70,9 +70,12 @@ private:
         if (prices.size() < period) {
             return 0.0;
         }
-        
-        auto start = prices.end() - period;
-        double sum = std::accumulate(start, prices.end(), 0.0);
+
+        size_t start_idx = prices.size() - period;
+        double sum = 0.0;
+        for (size_t i = start_idx; i < prices.size(); ++i) {
+            sum += prices[i];
+        }
         return sum / period;
     }
 };

@@ -79,12 +79,16 @@ private:
 
     double calculate_mean(const std::string& symbol) {
         const auto& prices = price_history_[symbol];
+        if (prices.empty()) return 0.0;
+
         double sum = std::accumulate(prices.begin(), prices.end(), 0.0);
         return sum / prices.size();
     }
 
     double calculate_std_dev(const std::string& symbol, double mean) {
         const auto& prices = price_history_[symbol];
+
+        if (prices.empty()) return 0.0;
 
         double sq_sum = 0.0;
         for (double price : prices) {

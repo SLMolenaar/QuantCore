@@ -132,7 +132,9 @@ public:
     double get_mid_price() const {
         Price bid = get_best_bid();
         Price ask = get_best_ask();
-        if (bid == 0 || ask == 0) return 0.0;
+        if (bid == 0 && ask == 0) return 0.0;
+        if (bid == 0) return ask / 100.0;
+        if (ask == 0) return bid / 100.0;
         return (bid + ask) / 200.0; // cents to dollars and average
     }
 
@@ -167,7 +169,7 @@ private:
     std::string symbol_;
     ExecutionConfig config_;
     Orderbook orderbook_;
-    
+
     // Position tracking, symbol & quantity
     std::map<std::string, double> positions_;
     std::map<std::string, double> avg_prices_;
@@ -176,11 +178,11 @@ private:
     double realized_pnl_;
     double unrealized_pnl_;
     double total_fees_ = 0.0;
-    
+
     void update_position(const Trade& trade) {
         const auto& bid_trade = trade.GetBidTrade();
         const auto& ask_trade = trade.GetAskTrade();
-        
+
         // cnvert cents to dollar
         double quantity = static_cast<double>(bid_trade.quantity_);
         double price = static_cast<double>(bid_trade.price_) / 100.0;
@@ -192,31 +194,37 @@ private:
             return;
         }
 
+        if (we_are_buyer && we_are_seller) {
+            return;
+        }
+
         double current_position = get_position();
         double current_avg_price = get_average_price();
 
         if (we_are_buyer) {
-            double fee = calculate_fee(price, quantity, false);
+            bool is_taker = true;
+            double fee = calculate_fee(price, quantity, !is_taker);
             total_fees_ += fee;
             realized_pnl_ -= fee;
 
-            orders_owned_.erase(bid_trade.orderId_);
-
             if (current_position < 0) {
+                // Covering short position
                 double cover_qty = std::min(quantity, -current_position);
                 realized_pnl_ += cover_qty * (current_avg_price - price);
 
                 if (quantity > -current_position) {
-                    double new_qty = quantity + current_position;
-                    positions_[symbol_] = new_qty;
-                    avg_prices_[symbol_] = price;
+                    double new_long_qty = quantity + current_position;
+                    positions_[symbol_] = new_long_qty;
+                    avg_prices_[symbol_] = price; // New position starts at current price
                 } else {
+                    // Still short or flat
                     positions_[symbol_] = current_position + quantity;
                     if (positions_[symbol_] == 0.0) {
                         avg_prices_[symbol_] = 0.0;
                     }
                 }
             } else {
+                // Adding to long or initiating long
                 if (current_position == 0.0) {
                     avg_prices_[symbol_] = price;
                 } else {
@@ -225,30 +233,34 @@ private:
                 }
                 positions_[symbol_] = current_position + quantity;
             }
+
+            orders_owned_.erase(bid_trade.orderId_);
         }
 
         if (we_are_seller) {
-            double fee = calculate_fee(price, quantity, true);
+            bool is_taker = true; // In backtest, we're always takers against market maker
+            double fee = calculate_fee(price, quantity, !is_taker);
             total_fees_ += fee;
             realized_pnl_ -= fee;
 
-            orders_owned_.erase(ask_trade.orderId_);
-
             if (current_position > 0) {
+                // Reducing long position
                 double sell_qty = std::min(quantity, current_position);
                 realized_pnl_ += sell_qty * (price - current_avg_price);
 
                 if (quantity > current_position) {
-                    double new_qty = -(quantity - current_position);
-                    positions_[symbol_] = new_qty;
+                    double new_short_qty = -(quantity - current_position);
+                    positions_[symbol_] = new_short_qty;
                     avg_prices_[symbol_] = price;
                 } else {
+                    // Still long or flat
                     positions_[symbol_] = current_position - quantity;
                     if (positions_[symbol_] == 0.0) {
                         avg_prices_[symbol_] = 0.0;
                     }
                 }
             } else {
+                // Adding to short or initiating short
                 if (current_position == 0.0) {
                     avg_prices_[symbol_] = price;
                 } else {
@@ -257,6 +269,8 @@ private:
                 }
                 positions_[symbol_] = current_position - quantity;
             }
+
+            orders_owned_.erase(ask_trade.orderId_);
         }
     }
 

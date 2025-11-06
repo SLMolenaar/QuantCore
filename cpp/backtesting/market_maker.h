@@ -20,7 +20,7 @@ public:
     MarketMaker(double spread_pct = 0.001, Quantity depth = 10000)
         : spread_pct_(spread_pct)
         , depth_(depth)
-        , next_order_id_(1000000000ULL)
+        , next_order_id_(10000000000000ULL)
     {
     }
 
@@ -63,6 +63,10 @@ public:
 
     void set_depth(Quantity depth) {
         depth_ = depth;
+    }
+
+    double get_spread() const {
+        return spread_pct_;
     }
 
 private:
