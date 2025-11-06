@@ -43,7 +43,10 @@ add_executable(QuantCore ${CPP_SOURCES}
         cpp/backtesting/data_loader.h
         cpp/backtesting/strategy.h
         cpp/backtesting/backtest_engine.h
-        cpp/strategies/buy_and_hold.h)
+        cpp/strategies/buy_and_hold.h
+        cpp/strategies/sma_crossover.h
+        cpp/strategies/mean_reversion.h
+        cpp/backtesting/market_maker.h)
 
 # Link libraries if needed
 # target_link_libraries(QuantCore pthread)

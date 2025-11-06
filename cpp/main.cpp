@@ -10,6 +10,8 @@
 #include "backtesting/bar_data.h"
 
 #include "strategies/buy_and_hold.h"
+#include "strategies/sma_crossover.h"
+#include "strategies/mean_reversion.h"
 
 #include "orderbook/Order.h"
 #include "orderbook/OrderType.h"
@@ -24,102 +26,74 @@ void print_separator(const std::string& title = "") {
     }
 }
 
-void test_orderbook_integration() {
-    print_separator("TEST 1: Orderbook Integration");
+void test_position_tracking() {
+    print_separator("TEST 1: Position Tracking");
 
     ExecutionEngine engine("AAPL");
 
-    std::cout << "Adding buy order: 100 @ $150.00\n";
-    auto buy = std::make_shared<Order>(
+    std::cout << "Initial position: " << engine.get_position() << "\n";
+    std::cout << "Initial PnL: $" << engine.get_realized_pnl() << "\n\n";
+
+    std::cout << "Adding sell order to book: 100 @ $150.00\n";
+    auto& orderbook = engine.get_orderbook();
+    auto sell1 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 999, Side::Sell, 15000, 100);
+    orderbook.AddOrder(sell1);
+
+    std::cout << "Our buy order (takes liquidity): 100 @ $150.00\n";
+    auto buy1 = std::make_shared<Order>(
         OrderType::GoodTillCancel, 1, Side::Buy, 15000, 100);
-    engine.execute_order(buy);
+    auto trades1 = engine.execute_order(buy1);
 
-    std::cout << "Adding sell order: 100 @ $150.00\n";
-    auto sell = std::make_shared<Order>(
-        OrderType::GoodTillCancel, 2, Side::Sell, 15000, 100);
-    auto trades = engine.execute_order(sell);
+    std::cout << "Position: " << engine.get_position() << " (should be 100)\n";
+    std::cout << "Avg price: $" << std::fixed << std::setprecision(2)
+              << engine.get_average_price() << "\n";
+    std::cout << "Realized PnL: $" << engine.get_realized_pnl() << " (should be negative from fees)\n";
+    std::cout << "Total fees: $" << engine.get_total_fees() << "\n\n";
 
-    std::cout << "Trades executed: " << trades.size() << "\n";
-    std::cout << "Orders in book: " << engine.get_orderbook().Size() << "\n";
-    std::cout << "Total fees: $" << std::fixed << std::setprecision(4)
-              << engine.get_total_fees() << "\n";
+    std::cout << "Adding buy order to book: 100 @ $151.00\n";
+    auto buy2 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 998, Side::Buy, 15100, 100);
+    orderbook.AddOrder(buy2);
+
+    std::cout << "Our sell order (close position): 100 @ $151.00\n";
+    auto sell2 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 2, Side::Sell, 15100, 100);
+    auto trades2 = engine.execute_order(sell2);
+
+    std::cout << "Position: " << engine.get_position() << " (should be 0)\n";
+    std::cout << "Realized PnL: $" << engine.get_realized_pnl() << " (should be ~$100 minus fees)\n";
+    std::cout << "Total fees: $" << engine.get_total_fees() << "\n";
 }
 
-void test_event_system() {
-    print_separator("TEST 2: Event System");
+void test_sma_crossover() {
+    print_separator("TEST 2: SMA Crossover Strategy");
 
-    EventQueue queue;
+    std::cout << "Loading data from CSV...\n";
 
-    // Add events
-    queue.push(std::make_shared<MarketDataEvent>("AAPL", 3000, 100.0, 0.0));
-    queue.push(std::make_shared<MarketDataEvent>("AAPL", 1000, 99.0, 0.0));
-    queue.push(std::make_shared<MarketDataEvent>("AAPL", 2000, 101.0, 0.0));
-
-    std::cout << "Events in queue: " << queue.size() << "\n";
-
-    // Should pop in chonolog order
-    std::cout << "Processing events in chronological order:\n";
-    while (!queue.empty()) {
-        auto event = queue.pop();
-        auto md_event = std::static_pointer_cast<MarketDataEvent>(event);
-        std::cout << "  Timestamp: " << md_event->get_timestamp()
-                  << ", Price: $" << md_event->get_price() << "\n";
-    }
-
-    std::cout << "Events processed in order!\n";
-}
-
-void test_data_generation() {
-    print_separator("TEST 3: Generate Sample Data");
-
-    // generate fake price data
     BarSeries bars;
-    double price = 100.0;
-
-    for (int i = 0; i < 10; ++i) {
-        int64_t timestamp = (i + 1) * 1000000000LL;  // 1 sec intervals
-
-        // Random walk
-        price += (i % 2 == 0) ? 1.0 : -0.5;
-
-        bars.emplace_back("TEST", timestamp, price, price + 1.0, price - 0.5, price + 0.5, 1000.0);
+    try {
+        bars = CSVDataLoader::load("../data/test_sma_crossover.csv", "AAPL");
+        std::cout << "Loaded " << bars.size() << " bars\n";
+    } catch (const std::exception& e) {
+        std::cerr << "ERROR loading data: " << e.what() << "\n";
+        std::cerr << "Make sure you ran the Python data generation script!\n";
+        std::cerr << "Expected file: ../data/test_sma_crossover.csv\n";
+        return;
     }
 
-    std::cout << "Generated " << bars.size() << " bars\n";
-    std::cout << "First bar: " << bars[0].close << "\n";
-    std::cout << "Last bar: " << bars.back().close << "\n";
-    std::cout << "Data generation works\n";
-}
-
-void test_backtest_engine() {
-    print_separator("TEST 4: Full Backtest");
-
-    // Generate test data, simple uptrend
-    BarSeries bars;
-    for (int i = 0; i < 100; ++i) {
-        int64_t timestamp = i * 1000000000LL;
-        double price = 100.0 + i * 0.5;  // Uptrend: +0.50 per bar
-        bars.emplace_back("AAPL", timestamp, price, price + 0.2, price - 0.2, price, 1000.0);
-    }
-
-    std::cout << "Generated " << bars.size() << " bars (uptrend)\n";
-    std::cout << "Starting price: $" << bars.front().close << "\n";
-    std::cout << "Ending price: $" << bars.back().close << "\n\n";
-
-    // Create strategy and engine
-    auto strategy = std::make_shared<BuyAndHold>();
-    BacktestEngine engine(100000.0);  // 100k capital
+    auto strategy = std::make_shared<SMACrossover>(50, 200);
+    BacktestEngine engine(100000.0);
 
     engine.add_data("AAPL", bars);
     engine.set_strategy(strategy);
 
-    std::cout << "Running backtest...\n";
+    std::cout << "Running SMA(50/200) crossover backtest...\n";
+    std::cout << "Data: " << bars.size() << " bars with trend reversal\n\n";
+
     double final_value = engine.run();
 
-    // Results
-    std::cout << "\n" << std::string(40, '-') << "\n";
-    std::cout << "Backtest Results:\n";
-    std::cout << std::string(40, '-') << "\n";
+    std::cout << "Results:\n";
     std::cout << "Initial capital: $" << std::fixed << std::setprecision(2) << 100000.0 << "\n";
     std::cout << "Final value: $" << final_value << "\n";
     std::cout << "Total PnL: $" << engine.get_total_pnl() << "\n";
@@ -127,27 +101,120 @@ void test_backtest_engine() {
     std::cout << "Return: " << std::setprecision(2)
               << ((final_value / 100000.0 - 1.0) * 100.0) << "%\n";
 
-    std::cout << "\nBacktest completed\n";
+    auto exec_engine = engine.get_execution_engine("AAPL");
+    if (exec_engine) {
+        std::cout << "Final position: " << exec_engine->get_position() << "\n";
+    }
+}
+
+void test_mean_reversion() {
+    print_separator("TEST 3: Mean Reversion Strategy");
+
+    std::cout << "Loading data from CSV...\n";
+
+    BarSeries bars;
+    try {
+        bars = CSVDataLoader::load("../data/test_mean_reversion.csv", "AAPL");
+        std::cout << "Loaded " << bars.size() << " bars\n";
+
+        std::cout << "\nData analysis:\n";
+        std::cout << "Price range: " << bars.front().close << " to " << bars.back().close << "\n";
+
+        double min_price = bars[0].close;
+        double max_price = bars[0].close;
+        for (const auto& bar : bars) {
+            min_price = std::min(min_price, bar.close);
+            max_price = std::max(max_price, bar.close);
+        }
+        std::cout << "Min: " << min_price << ", Max: " << max_price << "\n\n";
+
+    } catch (const std::exception& e) {
+        std::cerr << "ERROR loading data: " << e.what() << "\n";
+        std::cerr << "Make sure you ran the Python data generation script!\n";
+        std::cerr << "Expected file: ../data/test_mean_reversion.csv\n";
+        return;
+    }
+
+    auto strategy = std::make_shared<MeanReversion>(20, 1.5, 0.5);
+    BacktestEngine engine(100000.0);
+
+    engine.add_data("AAPL", bars);
+    engine.set_strategy(strategy);
+
+    std::cout << "Running mean reversion backtest...\n";
+    std::cout << "Parameters: lookback=20, entry_threshold=1.5, exit_threshold=0.5\n\n";
+
+    double final_value = engine.run();
+
+    std::cout << "Results:\n";
+    std::cout << "Initial capital: $" << std::fixed << std::setprecision(2) << 100000.0 << "\n";
+    std::cout << "Final value: $" << final_value << "\n";
+    std::cout << "Total PnL: $" << engine.get_total_pnl() << "\n";
+    std::cout << "Total fees: $" << engine.get_total_fees() << "\n";
+    std::cout << "Return: " << std::setprecision(2)
+              << ((final_value / 100000.0 - 1.0) * 100.0) << "%\n";
+
+    auto exec_engine = engine.get_execution_engine("AAPL");
+    if (exec_engine) {
+        std::cout << "Final position: " << exec_engine->get_position() << "\n";
+    }
+
+    std::cout << "Signals generated: " << strategy->get_signal_count() << "\n";
+}
+
+void test_buy_and_hold() {
+    print_separator("TEST 4: Buy and Hold (Baseline)");
+
+    std::cout << "Loading data from CSV...\n";
+
+    BarSeries bars;
+    try {
+        bars = CSVDataLoader::load("../data/test_buy_and_hold.csv", "AAPL");
+        std::cout << "Loaded " << bars.size() << " bars\n";
+    } catch (const std::exception& e) {
+        std::cerr << "ERROR loading data: " << e.what() << "\n";
+        std::cerr << "Make sure you ran the Python data generation script!\n";
+        std::cerr << "Expected file: ../data/test_buy_and_hold.csv\n";
+        return;
+    }
+
+    auto strategy = std::make_shared<BuyAndHold>();
+    BacktestEngine engine(100000.0);
+
+    engine.add_data("AAPL", bars);
+    engine.set_strategy(strategy);
+
+    std::cout << "Running buy and hold backtest...\n";
+    std::cout << "Data: " << bars.size() << " bars, steady uptrend\n\n";
+
+    double final_value = engine.run();
+
+    std::cout << "Results:\n";
+    std::cout << "Initial capital: $" << std::fixed << std::setprecision(2) << 100000.0 << "\n";
+    std::cout << "Final value: $" << final_value << "\n";
+    std::cout << "Total PnL: $" << engine.get_total_pnl() << "\n";
+    std::cout << "Total fees: $" << engine.get_total_fees() << "\n";
+    std::cout << "Return: " << std::setprecision(2)
+              << ((final_value / 100000.0 - 1.0) * 100.0) << "%\n";
 }
 
 int main() {
-    print_separator("Test");
+    print_separator("QuantCore Test Suite");
     std::cout << "\n";
 
     try {
-        test_orderbook_integration();
-        test_event_system();
-        test_data_generation();
-        test_backtest_engine();
+        test_position_tracking();
+        test_buy_and_hold();
+        test_sma_crossover();
+        test_mean_reversion();
 
         print_separator();
-        std::cout << "\n";
-        std::cout << "  ALL TESTS PASSED!\n";
+        std::cout << "\n  ALL TESTS PASSED!\n\n";
 
         return 0;
 
     } catch (const std::exception& e) {
-        std::cerr << "\n ERROR: " << e.what() << "\n\n";
+        std::cerr << "\nERROR: " << e.what() << "\n\n";
         return 1;
     }
 }
