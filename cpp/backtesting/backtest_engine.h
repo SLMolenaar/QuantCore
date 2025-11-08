@@ -8,6 +8,7 @@
 #include "strategy.h"
 #include "bar_data.h"
 #include "market_maker.h"
+#include "position_sizer.h"
 #include "../Execution.h"
 #include <memory>
 #include <map>
@@ -31,6 +32,7 @@ public:
         : initial_capital_(initial_capital)
         , current_capital_(initial_capital)
         , next_order_id_(1)
+        , position_sizer_(std::make_shared<FixedPercentage>(0.1))
     {
     }
 
@@ -45,9 +47,15 @@ public:
         strategy_ = strategy;
     }
 
-    /**
-     * Run backtest, returns final portfolio value
-     */
+    void set_position_sizer(PositionSizerPtr sizer) {
+        position_sizer_ = sizer;
+    }
+
+    PositionSizerPtr get_position_sizer() const {
+        return position_sizer_;
+    }
+
+     //Run backtest, returns final portfolio value
     double run() {
         if (!strategy_) {
             throw std::runtime_error("No strategy set");
@@ -55,7 +63,7 @@ public:
         if (market_data_.empty()) {
             throw std::runtime_error("No market data loaded");
         }
-
+        
         // Reset state
         event_queue_.clear();
         execution_engines_.clear();
@@ -164,6 +172,8 @@ private:
     double current_capital_;
     uint64_t next_order_id_;
 
+    PositionSizerPtr position_sizer_;
+
     // Equity tracking
     std::vector<double> equity_curve_;
     std::vector<int64_t> timestamps_;
@@ -227,30 +237,43 @@ private:
             spread_pct = mm_it->second->get_spread();
         }
 
+        Side order_side;
+        double order_price;
+
         if (signal->get_signal_type() == SignalType::BUY) {
-            auto order_event = std::make_shared<OrderEvent>(
-                signal->get_symbol(),
-                signal->get_timestamp(),
-                Side::Buy,
-                OrderType::GoodTillCancel,
-                100.0,
-                current_price * (1.0 + spread_pct / 2.0)
-            );
-            order_event->set_order_id(next_order_id_++);
-            event_queue_.push(order_event);
+            order_side = Side::Buy;
+            order_price = current_price * (1.0 + spread_pct / 2.0);
+        } else if (signal->get_signal_type() == SignalType::SELL) {
+            order_side = Side::Sell;
+            order_price = current_price * (1.0 - spread_pct / 2.0);
+            target_shares = -target_shares;
+        } else {
+            return;
         }
-        else if (signal->get_signal_type() == SignalType::SELL) {
-            auto order_event = std::make_shared<OrderEvent>(
-                signal->get_symbol(),
-                signal->get_timestamp(),
-                Side::Sell,
-                OrderType::GoodTillCancel,
-                100.0,
-                current_price * (1.0 - spread_pct / 2.0)
-            );
-            order_event->set_order_id(next_order_id_++);
-            event_queue_.push(order_event);
+
+        double position_delta = target_shares - current_position;
+
+        if (std::abs(position_delta) < 1.0) {
+            return;
         }
+
+        if (position_delta > 0) {
+            order_side = Side::Buy;
+        } else {
+            order_side = Side::Sell;
+            position_delta = -position_delta;
+        }
+
+        auto order_event = std::make_shared<OrderEvent>(
+            signal->get_symbol(),
+            signal->get_timestamp(),
+            order_side,
+            OrderType::GoodTillCancel,
+            std::abs(position_delta),
+            order_price
+        );
+        order_event->set_order_id(next_order_id_++);
+        event_queue_.push(order_event);
     }
 
     // execute through orderbook
