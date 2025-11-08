@@ -12,8 +12,6 @@ Demonstrates the full workflow:
 import sys
 from pathlib import Path
 
-from python.quantcore.plotting import save_all_plots
-
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -217,7 +215,6 @@ def calculate_metrics_example(results, bars):
     final_value = results['final_value']
 
     # Build equity curve
-
     equity_curve = build_equity_curve(initial_capital, final_value, len(bars))
 
     print("Calculating comprehensive metrics...")
@@ -243,50 +240,73 @@ def visualize_results(equity_curve, bars, strategy_name):
     # Extract timestamps
     timestamps = np.array([bar.timestamp_ns for bar in bars])
 
-    print("Generating plots...")
+    print("Generating and displaying plots...\n")
 
     # 1. Equity curve
-    print("  - Equity curve with drawdown shading")
-    fig = plot_equity_curve(
-        equity_curve,
-        timestamps,
-        title=f"{strategy_name} - Equity Curve",
-        show_drawdown=True
-    )
-    plt.savefig(f"plots/{strategy_name}_equity.png", dpi=150, bbox_inches='tight')
-    plt.close(fig)
+    print("  Plot 1: Equity curve with drawdown shading")
+    try:
+        fig = plot_equity_curve(
+            equity_curve,
+            timestamps,
+            title=f"{strategy_name} - Equity Curve",
+            show_drawdown=True
+        )
+        plt.savefig(f"plots/{strategy_name}_equity.png", dpi=150, bbox_inches='tight')
+        plt.show()
+        print("    ✓ Success")
+    except Exception as e:
+        print(f"    ✗ Failed: {e}")
 
     # 2. Underwater plot
-    print("  - Underwater plot")
-    fig = plot_underwater(equity_curve, timestamps)
-    plt.savefig(f"plots/{strategy_name}_underwater.png", dpi=150, bbox_inches='tight')
-    plt.close(fig)
+    print("\n  Plot 2: Underwater plot (drawdown over time)")
+    try:
+        fig = plot_underwater(equity_curve, timestamps)
+        plt.savefig(f"plots/{strategy_name}_underwater.png", dpi=150, bbox_inches='tight')
+        plt.show()
+        print("    ✓ Success")
+    except Exception as e:
+        print(f"    ✗ Failed: {e}")
 
     # 3. Returns distribution
-    print("  - Returns distribution")
-    returns = calculate_returns(equity_curve)
-    fig = plot_returns_distribution(returns)
-    plt.savefig(f"plots/{strategy_name}_returns.png", dpi=150, bbox_inches='tight')
-    plt.close(fig)
+    print("\n  Plot 3: Returns distribution with Q-Q plot")
+    try:
+        returns = calculate_returns(equity_curve)
+        fig = plot_returns_distribution(returns)
+        plt.savefig(f"plots/{strategy_name}_returns.png", dpi=150, bbox_inches='tight')
+        plt.show()
+        print("    ✓ Success")
+    except Exception as e:
+        print(f"    ✗ Failed: {e}")
+        print(f"    Hint: Install scipy with: pip install scipy")
 
     # 4. Rolling metrics
-    print("  - Rolling metrics")
-    fig = plot_rolling_metrics(returns, timestamps, window=60)
-    plt.savefig(f"plots/{strategy_name}_rolling.png", dpi=150, bbox_inches='tight')
-    plt.close(fig)
+    print("\n  Plot 4: Rolling Sharpe and Volatility (60-period window)")
+    try:
+        returns = calculate_returns(equity_curve)
+        fig = plot_rolling_metrics(returns, timestamps, window=60)
+        plt.savefig(f"plots/{strategy_name}_rolling.png", dpi=150, bbox_inches='tight')
+        plt.show()
+        print("    ✓ Success")
+    except Exception as e:
+        print(f"    ✗ Failed: {e}")
 
     # 5. Full tearsheet
-    print("  - Full tearsheet")
-    fig = plot_full_tearsheet(
-        equity_curve,
-        returns,
-        timestamps,
-        title=f"{strategy_name} Performance Tearsheet"
-    )
-    plt.savefig(f"plots/{strategy_name}_tearsheet.png", dpi=150, bbox_inches='tight')
-    plt.close(fig)
+    print("\n  Plot 5: Full performance tearsheet (comprehensive view)")
+    try:
+        returns = calculate_returns(equity_curve)
+        fig = plot_full_tearsheet(
+            equity_curve,
+            returns,
+            timestamps,
+            title=f"{strategy_name} Performance Tearsheet"
+        )
+        plt.savefig(f"plots/{strategy_name}_tearsheet.png", dpi=150, bbox_inches='tight')
+        plt.show()
+        print("    ✓ Success")
+    except Exception as e:
+        print(f"    ✗ Failed: {e}")
 
-    print(f"\nAll plots saved to plots/ directory")
+    print(f"\n  Plots saved to plots/ directory")
 
 
 def compare_strategies(results_list):
@@ -312,6 +332,8 @@ def compare_strategies(results_list):
     print(f"\nBest Performer: {best['Strategy']} ({best['Return (%)']:.2f}%)")
 
     if PLOTTING_AVAILABLE:
+        print("\nGenerating comparison visualization...")
+
         # Visualization
         fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -337,9 +359,9 @@ def compare_strategies(results_list):
 
         plt.tight_layout()
         plt.savefig('plots/strategy_comparison.png', dpi=150, bbox_inches='tight')
-        plt.close(fig)
+        plt.show()
 
-        print("\nComparison chart saved to plots/strategy_comparison.png")
+        print("  Comparison chart saved and displayed")
 
 
 def main():
