@@ -33,7 +33,7 @@ public:
         , next_order_id_(1)
     {
     }
-    
+
     /**
      * Add market data to backtest
      */
@@ -45,7 +45,9 @@ public:
         strategy_ = strategy;
     }
 
-     //Run backtest, returns final portfolio value
+    /**
+     * Run backtest, returns final portfolio value
+     */
     double run() {
         if (!strategy_) {
             throw std::runtime_error("No strategy set");
@@ -53,7 +55,7 @@ public:
         if (market_data_.empty()) {
             throw std::runtime_error("No market data loaded");
         }
-        
+
         // Reset state
         event_queue_.clear();
         execution_engines_.clear();
@@ -62,7 +64,11 @@ public:
         current_capital_ = initial_capital_;
         next_order_id_ = 1;
         strategy_->reset();
-        
+
+        // Clear equity tracking
+        equity_curve_.clear();
+        timestamps_.clear();
+
         // Initialize execution engines for each symbol
         for (const auto& [symbol, bars] : market_data_) {
             execution_engines_[symbol] = std::make_shared<ExecutionEngine>(symbol);
@@ -70,7 +76,11 @@ public:
         }
 
         load_market_data();
-        
+
+        // Record initial equity
+        equity_curve_.push_back(initial_capital_);
+        timestamps_.push_back(0);
+
         // Main event loop
         while (!event_queue_.empty()) {
             auto event = event_queue_.pop();
@@ -92,8 +102,15 @@ public:
                     handle_fill(event);
                     break;
             }
+
+            // After processing event, record equity if it was a market data event
+            if (event->get_type() == EventType::MARKET_DATA) {
+                double current_equity = calculate_portfolio_value();
+                equity_curve_.push_back(current_equity);
+                timestamps_.push_back(event->get_timestamp());
+            }
         }
-        
+
         return calculate_portfolio_value();
     }
 
@@ -113,10 +130,26 @@ public:
         return total;
     }
 
-     // Get execution engine for a symbol (for inspection)
+    /**
+     * Get execution engine for a symbol (for inspection)
+     */
     std::shared_ptr<ExecutionEngine> get_execution_engine(const std::string& symbol) const {
         auto it = execution_engines_.find(symbol);
         return it != execution_engines_.end() ? it->second : nullptr;
+    }
+
+    /**
+     * Get equity curve (portfolio value over time)
+     */
+    std::vector<double> get_equity_curve() const {
+        return equity_curve_;
+    }
+
+    /**
+     * Get timestamps corresponding to equity curve
+     */
+    std::vector<int64_t> get_timestamps() const {
+        return timestamps_;
     }
 
 private:
@@ -130,6 +163,10 @@ private:
     double initial_capital_;
     double current_capital_;
     uint64_t next_order_id_;
+
+    // Equity tracking
+    std::vector<double> equity_curve_;
+    std::vector<int64_t> timestamps_;
 
     void load_market_data() {
         for (const auto& [symbol, bars] : market_data_) {
@@ -216,7 +253,7 @@ private:
         }
     }
 
-    //execute through orderbook
+    // execute through orderbook
     void handle_order(EventPtr event) {
         auto order_event = std::static_pointer_cast<OrderEvent>(event);
 
@@ -260,7 +297,7 @@ private:
         }
     }
 
-    //update positions
+    // update positions
     void handle_fill(EventPtr event) {
         auto fill = std::static_pointer_cast<FillEvent>(event);
 

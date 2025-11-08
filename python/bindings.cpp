@@ -282,6 +282,11 @@ PYBIND11_MODULE(_core, m) {
         .def("get_execution_engine", &BacktestEngine::get_execution_engine,
              py::arg("symbol"),
              "Get execution engine for a symbol (for inspection)");
+        .def("get_equity_curve", &BacktestEngine::get_equity_curve,
+             "Get portfolio value over time")
+        .def("get_timestamps", &BacktestEngine::get_timestamps,
+             "Get timestamps corresponding to equity curve");
+
 
     // ============================================================================
     // UTILITY FUNCTIONS
