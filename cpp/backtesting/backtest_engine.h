@@ -231,26 +231,6 @@ private:
             return;
         }
 
-        // Get current position from execution engine
-        auto ee_it = execution_engines_.find(signal->get_symbol());
-        if (ee_it == execution_engines_.end()) {
-            return;
-        }
-
-        double current_position = ee_it->second->get_position();
-
-        // Calculate target position size using position sizer
-        PositionSizingContext ctx(
-            signal->get_strength(),
-            current_capital_,
-            current_price,
-            current_position,
-            0.02,  // portfolio_volatility - could be calculated from returns
-            0.05   // stop_loss_distance - could come from strategy
-        );
-
-        double target_shares = position_sizer_->calculate_size(ctx);
-
         auto mm_it = market_makers_.find(signal->get_symbol());
         double spread_pct = 0.0001; // Default
         if (mm_it != market_makers_.end()) {
