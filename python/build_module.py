@@ -88,6 +88,19 @@ def find_cmake():
     except:
         pass
 
+    # Try Visual Studio bundled CMake
+    try:
+        vs_paths = [
+            r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+            r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+            r"C:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
+        ]
+        for path in vs_paths:
+            if Path(path).exists():
+                return path
+    except:
+        pass
+
     # Try Linux/Mac paths
     linux_paths = [
         "/usr/bin/cmake",
@@ -166,14 +179,24 @@ def configure_cmake(python_dir, build_dir, cmake_path, python_exe):
     """
     print_info("Configuring CMake...")
 
+    # Detect platform
+    import platform
+    is_windows = platform.system() == "Windows"
+
+    cmake_args = [
+        cmake_path,
+        "-S", ".",
+        "-B", "build",
+        "-DCMAKE_BUILD_TYPE=Release",
+        f"-DPython3_EXECUTABLE={python_exe}"
+    ]
+
+    # On Windows with Visual Studio, force 64-bit architecture
+    if is_windows:
+        cmake_args.extend(["-A", "x64"])
+
     try:
-        subprocess.run([
-            cmake_path,
-            "-S", ".",
-            "-B", "build",
-            "-DCMAKE_BUILD_TYPE=Release",
-            f"-DPython3_EXECUTABLE={python_exe}"
-        ], cwd=python_dir, check=True, capture_output=True, text=True)
+        subprocess.run(cmake_args, cwd=python_dir, check=True, capture_output=True, text=True)
 
         print_success("CMake configured successfully")
         return True

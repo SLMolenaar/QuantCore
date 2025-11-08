@@ -1,7 +1,12 @@
 cmake_minimum_required(VERSION 3.15)
-project(quantcore_python)
+project(quantcore_python CXX)
 
 set(CMAKE_CXX_STANDARD 20)
+
+# Force 64-bit build on Windows
+if(WIN32)
+    set(CMAKE_GENERATOR_PLATFORM x64)
+endif()
 
 find_package(Python3 COMPONENTS Interpreter Development.Module)
 
