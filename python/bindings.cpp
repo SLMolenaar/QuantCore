@@ -283,6 +283,77 @@ PYBIND11_MODULE(_core, m) {
              py::arg("symbol"),
              "Get execution engine for a symbol (for inspection)");
 
+
+    // ============================================================================
+    // POSITION SIZING
+    // ============================================================================
+
+    py::class_<PositionSizingContext>(m, "PositionSizingContext")
+        .def(py::init<double, double, double, double, double, double>(),
+             py::arg("signal_strength") = 1.0,
+             py::arg("current_capital") = 100000.0,
+             py::arg("current_price") = 100.0,
+             py::arg("current_position") = 0.0,
+             py::arg("portfolio_volatility") = 0.02,
+             py::arg("stop_loss_distance") = 0.05,
+             "Context for position sizing calculations")
+        .def_readwrite("signal_strength", &PositionSizingContext::signal_strength)
+        .def_readwrite("current_capital", &PositionSizingContext::current_capital)
+        .def_readwrite("current_price", &PositionSizingContext::current_price)
+        .def_readwrite("current_position", &PositionSizingContext::current_position)
+        .def_readwrite("portfolio_volatility", &PositionSizingContext::portfolio_volatility)
+        .def_readwrite("stop_loss_distance", &PositionSizingContext::stop_loss_distance);
+
+    py::class_<PositionSizer, std::shared_ptr<PositionSizer>>(m, "PositionSizer")
+        .def("calculate_size", &PositionSizer::calculate_size,
+             py::arg("context"),
+             "Calculate position size based on context")
+        .def("get_name", &PositionSizer::get_name,
+             "Get position sizer name")
+        .def("set_max_position_size", &PositionSizer::set_max_position_size,
+             py::arg("max_size"),
+             "Set maximum position size constraint")
+        .def("set_min_position_size", &PositionSizer::set_min_position_size,
+             py::arg("min_size"),
+             "Set minimum position size constraint")
+        .def("set_max_leverage", &PositionSizer::set_max_leverage,
+             py::arg("max_leverage"),
+             "Set maximum leverage constraint");
+
+    py::class_<FixedPercentage, PositionSizer, std::shared_ptr<FixedPercentage>>(m, "FixedPercentage")
+        .def(py::init<double>(),
+             py::arg("percentage") = 0.1,
+             "Fixed percentage of capital sizing (e.g., 0.1 = 10%)");
+
+    py::class_<RiskBased, PositionSizer, std::shared_ptr<RiskBased>>(m, "RiskBased")
+        .def(py::init<double>(),
+             py::arg("risk_per_trade") = 0.01,
+             "Risk-based sizing using stop-loss distance (e.g., 0.01 = 1% risk)");
+
+    py::class_<KellyCriterion, PositionSizer, std::shared_ptr<KellyCriterion>>(m, "KellyCriterion")
+        .def(py::init<double, double, double, double>(),
+             py::arg("win_rate"),
+             py::arg("avg_win"),
+             py::arg("avg_loss"),
+             py::arg("fraction") = 1.0,
+             "Kelly Criterion sizing based on historical win rate and win/loss ratio");
+
+    py::class_<EqualWeight, PositionSizer, std::shared_ptr<EqualWeight>>(m, "EqualWeight")
+        .def(py::init<int>(),
+             py::arg("num_positions"),
+             "Equal weight across N positions");
+
+    py::class_<VolatilityTargeting, PositionSizer, std::shared_ptr<VolatilityTargeting>>(m, "VolatilityTargeting")
+        .def(py::init<double>(),
+             py::arg("target_volatility") = 0.15,
+             "Volatility targeting position sizing");
+
+    py::class_<FixedShares, PositionSizer, std::shared_ptr<FixedShares>>(m, "FixedShares")
+        .def(py::init<double>(),
+             py::arg("num_shares"),
+             "Fixed number of shares per signal");
+
+
     // ============================================================================
     // UTILITY FUNCTIONS
     // ============================================================================

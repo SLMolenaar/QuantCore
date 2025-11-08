@@ -8,6 +8,7 @@
 #include "strategy.h"
 #include "bar_data.h"
 #include "market_maker.h"
+#include "position_sizer.h"
 #include "../Execution.h"
 #include <memory>
 #include <map>
@@ -15,28 +16,16 @@
 
 namespace quantcore {
 
-/**
- * Main backtesting loop
- * 
- * Load market data (MarketDataEvents)
- * Strategy sees data, generates SignalEvents
- * Portfolio converts signals (OrderEvents)
- * Execution fills orders )FillEvents)
- * Update positions and PnL
- * Repeat until there's no mor edata
- */
 class BacktestEngine {
 public:
     BacktestEngine(double initial_capital = 100000.0)
         : initial_capital_(initial_capital)
         , current_capital_(initial_capital)
         , next_order_id_(1)
+        , position_sizer_(std::make_shared<FixedPercentage>(0.1))
     {
     }
-    
-    /**
-     * Add market data to backtest
-     */
+
     void add_data(const std::string& symbol, const BarSeries& bars) {
         market_data_[symbol] = bars;
     }
@@ -45,7 +34,14 @@ public:
         strategy_ = strategy;
     }
 
-     //Run backtest, returns final portfolio value
+    void set_position_sizer(PositionSizerPtr sizer) {
+        position_sizer_ = sizer;
+    }
+
+    PositionSizerPtr get_position_sizer() const {
+        return position_sizer_;
+    }
+
     double run() {
         if (!strategy_) {
             throw std::runtime_error("No strategy set");
@@ -53,8 +49,7 @@ public:
         if (market_data_.empty()) {
             throw std::runtime_error("No market data loaded");
         }
-        
-        // Reset state
+
         event_queue_.clear();
         execution_engines_.clear();
         market_makers_.clear();
@@ -62,16 +57,20 @@ public:
         current_capital_ = initial_capital_;
         next_order_id_ = 1;
         strategy_->reset();
-        
-        // Initialize execution engines for each symbol
+
+        equity_curve_.clear();
+        timestamps_.clear();
+
         for (const auto& [symbol, bars] : market_data_) {
             execution_engines_[symbol] = std::make_shared<ExecutionEngine>(symbol);
             market_makers_[symbol] = std::make_shared<MarketMaker>(0.0001, 100000);
         }
 
         load_market_data();
-        
-        // Main event loop
+
+        equity_curve_.push_back(initial_capital_);
+        timestamps_.push_back(0);
+
         while (!event_queue_.empty()) {
             auto event = event_queue_.pop();
 
@@ -92,8 +91,14 @@ public:
                     handle_fill(event);
                     break;
             }
+
+            if (event->get_type() == EventType::MARKET_DATA) {
+                double current_equity = calculate_portfolio_value();
+                equity_curve_.push_back(current_equity);
+                timestamps_.push_back(event->get_timestamp());
+            }
         }
-        
+
         return calculate_portfolio_value();
     }
 
@@ -113,10 +118,17 @@ public:
         return total;
     }
 
-     // Get execution engine for a symbol (for inspection)
     std::shared_ptr<ExecutionEngine> get_execution_engine(const std::string& symbol) const {
         auto it = execution_engines_.find(symbol);
         return it != execution_engines_.end() ? it->second : nullptr;
+    }
+
+    std::vector<double> get_equity_curve() const {
+        return equity_curve_;
+    }
+
+    std::vector<int64_t> get_timestamps() const {
+        return timestamps_;
     }
 
 private:
@@ -130,6 +142,11 @@ private:
     double initial_capital_;
     double current_capital_;
     uint64_t next_order_id_;
+
+    PositionSizerPtr position_sizer_;
+
+    std::vector<double> equity_curve_;
+    std::vector<int64_t> timestamps_;
 
     void load_market_data() {
         for (const auto& [symbol, bars] : market_data_) {
@@ -163,14 +180,12 @@ private:
 
         strategy_->on_data(*md_event);
 
-        // Check if strategy generated any signals
         auto signals = strategy_->get_signals();
         for (const auto& signal : signals) {
             event_queue_.push(signal);
         }
     }
 
-    // convert signal event to order
     void handle_signal(EventPtr event) {
         auto signal = std::static_pointer_cast<SignalEvent>(event);
 
@@ -184,39 +199,74 @@ private:
             return;
         }
 
+        auto ee_it = execution_engines_.find(signal->get_symbol());
+        if (ee_it == execution_engines_.end()) {
+            return;
+        }
+
+        double current_position = ee_it->second->get_position();
+        double current_equity = calculate_portfolio_value();
+
+        PositionSizingContext context(
+            signal->get_strength(),
+            current_equity,
+            current_price,
+            current_position,
+            0.02,
+            0.05
+        );
+
+        double target_shares = position_sizer_->calculate_size(context);
+
+        if (std::abs(target_shares) < 1.0) {
+            return;
+        }
+
         auto mm_it = market_makers_.find(signal->get_symbol());
-        double spread_pct = 0.0001; // Default
+        double spread_pct = 0.0001;
         if (mm_it != market_makers_.end()) {
             spread_pct = mm_it->second->get_spread();
         }
 
+        Side order_side;
+        double order_price;
+
         if (signal->get_signal_type() == SignalType::BUY) {
-            auto order_event = std::make_shared<OrderEvent>(
-                signal->get_symbol(),
-                signal->get_timestamp(),
-                Side::Buy,
-                OrderType::GoodTillCancel,
-                100.0,
-                current_price * (1.0 + spread_pct / 2.0)
-            );
-            order_event->set_order_id(next_order_id_++);
-            event_queue_.push(order_event);
+            order_side = Side::Buy;
+            order_price = current_price * (1.0 + spread_pct / 2.0);
+        } else if (signal->get_signal_type() == SignalType::SELL) {
+            order_side = Side::Sell;
+            order_price = current_price * (1.0 - spread_pct / 2.0);
+            target_shares = -target_shares;
+        } else {
+            return;
         }
-        else if (signal->get_signal_type() == SignalType::SELL) {
-            auto order_event = std::make_shared<OrderEvent>(
-                signal->get_symbol(),
-                signal->get_timestamp(),
-                Side::Sell,
-                OrderType::GoodTillCancel,
-                100.0,
-                current_price * (1.0 - spread_pct / 2.0)
-            );
-            order_event->set_order_id(next_order_id_++);
-            event_queue_.push(order_event);
+
+        double position_delta = target_shares - current_position;
+
+        if (std::abs(position_delta) < 1.0) {
+            return;
         }
+
+        if (position_delta > 0) {
+            order_side = Side::Buy;
+        } else {
+            order_side = Side::Sell;
+            position_delta = -position_delta;
+        }
+
+        auto order_event = std::make_shared<OrderEvent>(
+            signal->get_symbol(),
+            signal->get_timestamp(),
+            order_side,
+            OrderType::GoodTillCancel,
+            std::abs(position_delta),
+            order_price
+        );
+        order_event->set_order_id(next_order_id_++);
+        event_queue_.push(order_event);
     }
 
-    //execute through orderbook
     void handle_order(EventPtr event) {
         auto order_event = std::static_pointer_cast<OrderEvent>(event);
 
@@ -245,7 +295,6 @@ private:
 
         auto trades = engine->execute_order(order);
 
-        // Generate fill events for each trade
         for (const auto& trade : trades) {
             auto fill_event = std::make_shared<FillEvent>(
                 order_event->get_symbol(),
@@ -260,7 +309,6 @@ private:
         }
     }
 
-    //update positions
     void handle_fill(EventPtr event) {
         auto fill = std::static_pointer_cast<FillEvent>(event);
 
@@ -269,8 +317,7 @@ private:
             double engine_position = ee_it->second->get_position();
             strategy_->set_position(fill->get_symbol(), engine_position);
         }
-        
-        // Notify strategy
+
         strategy_->on_fill(*fill);
     }
 
