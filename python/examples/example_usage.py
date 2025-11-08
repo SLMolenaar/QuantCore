@@ -1,262 +1,418 @@
 """
-Example: Using QuantCore Python bindings
+QuantCore Example Usage
 
-This script demonstrates how to use the QuantCore backtesting engine from Python.
+Demonstrates the full workflow:
+1. Load market data
+2. Run backtests with different strategies
+3. Calculate performance metrics
+4. Generate visualizations
+5. Compare strategies
 """
 
 import sys
 from pathlib import Path
 
-# Add parent directory to path so we can import quantcore
+from python.quantcore.plotting import save_all_plots
+
+# Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import quantcore as qc
-
-# Add parent directory to path to import quantcore
-sys.path.insert(0, str(Path(__file__).parent))
 
 try:
     import quantcore as qc
 except ImportError:
-    print("Error: Could not import quantcore module.")
-    print("Make sure you've built the C++ extension:")
+    print("ERROR: Could not import quantcore module.")
+    print("Build the C++ extension first:")
     print("  python python/build_module.py")
     sys.exit(1)
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
-def example_1_simple_backtest():
-    """Example 1: Simple buy and hold backtest"""
-    print("\n" + "=" * 60)
-    print("Example 1: Buy and Hold Strategy")
-    print("=" * 60)
+# Import analytics and plotting
+try:
+    from quantcore.analytics import calculate_all_metrics, calculate_returns
+    from quantcore.plotting import (
+        plot_equity_curve,
+        plot_underwater,
+        plot_returns_distribution,
+        plot_rolling_metrics,
+        plot_full_tearsheet
+    )
+    PLOTTING_AVAILABLE = True
+except ImportError:
+    print("WARNING: Analytics/plotting modules not found")
+    print("Place analytics.py and plotting.py in python/quantcore/")
+    PLOTTING_AVAILABLE = False
 
-    # Load data
-    print("Loading data from CSV...")
-    bars = qc.load_csv_data("../data/test_buy_and_hold.csv", "AAPL")
+# Find project root (where data/ directory is)
+SCRIPT_DIR = Path(__file__).parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+
+# Verify data directory exists
+if not DATA_DIR.exists():
+    print(f"WARNING: Data directory not found at {DATA_DIR}")
+    print("Looking for data files in script directory...")
+    DATA_DIR = SCRIPT_DIR
+
+
+def print_section(title):
+    """Print section header"""
+    print("\n" + "=" * 70)
+    print(f"  {title}")
+    print("=" * 70)
+
+
+def build_equity_curve(initial_capital, final_value, num_periods):
+    """
+    Build synthetic equity curve for visualization
+    In production, you'd track this during the backtest
+    """
+    return_pct = (final_value / initial_capital - 1.0)
+
+    # Simple linear growth for demo
+    curve = np.array([
+        initial_capital * (1 + (i / num_periods) * return_pct)
+        for i in range(num_periods)
+    ])
+
+    # Add some realistic volatility
+    noise = np.random.normal(0, 0.002, num_periods)
+    curve = curve * (1 + np.cumsum(noise))
+
+    return curve
+
+
+def run_buy_and_hold():
+    """Example 1: Buy and Hold Strategy"""
+    print_section("Example 1: Buy and Hold Strategy")
+
+    data_file = DATA_DIR / "test_buy_and_hold.csv"
+    print(f"Loading data from: {data_file}")
+
+    if not data_file.exists():
+        print(f"ERROR: File not found: {data_file}")
+        raise FileNotFoundError(f"Data file not found: {data_file}")
+
+    bars = qc.load_csv_data(str(data_file), "AAPL")
     print(f"Loaded {len(bars)} bars")
 
-    # Create strategy
     strategy = qc.BuyAndHold()
 
-    # Create and run backtest
-    print("Running backtest...")
+    print("\nRunning backtest...")
     results = qc.run_backtest(
         strategy=strategy,
         data={"AAPL": bars},
         initial_capital=100000.0
     )
 
-    # Print results
-    print(f"\nResults:")
-    print(f"  Strategy: {results['strategy']}")
+    print("\nResults:")
+    print(f"  Strategy:        {results['strategy']}")
     print(f"  Initial Capital: ${results['initial_capital']:,.2f}")
-    print(f"  Final Value: ${results['final_value']:,.2f}")
-    print(f"  Total PnL: ${results['total_pnl']:,.2f}")
-    print(f"  Total Fees: ${results['total_fees']:,.2f}")
-    print(f"  Return: {results['return_pct']:.2f}%")
+    print(f"  Final Value:     ${results['final_value']:,.2f}")
+    print(f"  Total PnL:       ${results['total_pnl']:,.2f}")
+    print(f"  Total Fees:      ${results['total_fees']:,.2f}")
+    print(f"  Return:          {results['return_pct']:.2f}%")
+
+    return results, bars
 
 
-def example_2_sma_crossover():
-    """Example 2: SMA Crossover strategy"""
-    print("\n" + "=" * 60)
-    print("Example 2: SMA Crossover Strategy")
-    print("=" * 60)
+def run_sma_crossover():
+    """Example 2: SMA Crossover Strategy"""
+    print_section("Example 2: SMA Crossover Strategy")
 
-    # Load data
-    print("Loading data from CSV...")
-    bars = qc.load_csv_data("../data/test_sma_crossover.csv", "AAPL")
+    data_file = DATA_DIR / "test_sma_crossover.csv"
+    print(f"Loading data from: {data_file}")
+
+    if not data_file.exists():
+        print(f"ERROR: File not found: {data_file}")
+        raise FileNotFoundError(f"Data file not found: {data_file}")
+
+    bars = qc.load_csv_data(str(data_file), "AAPL")
     print(f"Loaded {len(bars)} bars")
 
-    # Create strategy with custom parameters
     strategy = qc.SMACrossover(fast_period=50, slow_period=200)
 
-    # Create backtest engine manually for more control
     engine = qc.BacktestEngine(initial_capital=100000.0)
     engine.add_data("AAPL", bars)
     engine.set_strategy(strategy)
 
-    print("Running backtest...")
+    print("\nRunning backtest...")
     final_value = engine.run()
 
-    # Get detailed results
-    print(f"\nResults:")
-    print(f"  Initial Capital: $100,000.00")
-    print(f"  Final Value: ${final_value:,.2f}")
-    print(f"  Total PnL: ${engine.get_total_pnl():,.2f}")
-    print(f"  Total Fees: ${engine.get_total_fees():,.2f}")
-    print(f"  Return: {((final_value / 100000.0 - 1.0) * 100.0):.2f}%")
+    total_pnl = engine.get_total_pnl()
+    total_fees = engine.get_total_fees()
+    return_pct = ((final_value / 100000.0) - 1.0) * 100.0
 
-    # Get execution engine details
+    print("\nResults:")
+    print(f"  Initial Capital: $100,000.00")
+    print(f"  Final Value:     ${final_value:,.2f}")
+    print(f"  Total PnL:       ${total_pnl:,.2f}")
+    print(f"  Total Fees:      ${total_fees:,.2f}")
+    print(f"  Return:          {return_pct:.2f}%")
+
     ee = engine.get_execution_engine("AAPL")
     if ee:
-        print(f"\nPosition Details:")
-        print(f"  Final Position: {ee.get_position()}")
-        print(f"  Average Price: ${ee.get_average_price():.2f}")
-        print(f"  Realized PnL: ${ee.get_realized_pnl():.2f}")
-        print(f"  Unrealized PnL: ${ee.get_unrealized_pnl():.2f}")
+        print("\n  Position Details:")
+        print(f"    Final Position:   {ee.get_position():.0f} shares")
+        print(f"    Average Price:    ${ee.get_average_price():.2f}")
+        print(f"    Realized PnL:     ${ee.get_realized_pnl():,.2f}")
+        print(f"    Unrealized PnL:   ${ee.get_unrealized_pnl():,.2f}")
+
+    return {
+        'strategy': strategy.get_name(),
+        'final_value': final_value,
+        'total_pnl': total_pnl,
+        'total_fees': total_fees,
+        'return_pct': return_pct
+    }, bars
 
 
-def example_3_mean_reversion():
-    """Example 3: Mean Reversion strategy"""
-    print("\n" + "=" * 60)
-    print("Example 3: Mean Reversion Strategy")
-    print("=" * 60)
+def run_mean_reversion():
+    """Example 3: Mean Reversion Strategy"""
+    print_section("Example 3: Mean Reversion Strategy")
 
-    # Load data
-    print("Loading data from CSV...")
-    bars = qc.load_csv_data("../data/test_mean_reversion.csv", "AAPL")
+    data_file = DATA_DIR / "test_mean_reversion.csv"
+    print(f"Loading data from: {data_file}")
+
+    if not data_file.exists():
+        print(f"ERROR: File not found: {data_file}")
+        raise FileNotFoundError(f"Data file not found: {data_file}")
+
+    bars = qc.load_csv_data(str(data_file), "AAPL")
     print(f"Loaded {len(bars)} bars")
 
-    # Create mean reversion strategy
     strategy = qc.MeanReversion(
         lookback=20,
         entry_threshold=1.5,
         exit_threshold=0.5
     )
 
-    # Run backtest
-    print("Running backtest...")
-    results = qc.run_backtest(strategy, {"AAPL": bars}, 100000.0)
+    print("\nRunning backtest...")
+    results = qc.run_backtest(
+        strategy=strategy,
+        data={"AAPL": bars},
+        initial_capital=100000.0
+    )
 
-    # Print results
-    print(f"\nResults:")
-    print(f"  Return: {results['return_pct']:.2f}%")
-    print(f"  Total PnL: ${results['total_pnl']:,.2f}")
-    print(f"  Total Fees: ${results['total_fees']:,.2f}")
+    print("\nResults:")
+    print(f"  Return:           {results['return_pct']:.2f}%")
+    print(f"  Total PnL:        ${results['total_pnl']:,.2f}")
+    print(f"  Total Fees:       ${results['total_fees']:,.2f}")
     print(f"  Signals Generated: {strategy.get_signal_count()}")
 
-
-def example_4_custom_strategy():
-    """Example 4: Custom Python strategy"""
-    print("\n" + "=" * 60)
-    print("Example 4: Custom Python Strategy")
-    print("=" * 60)
-
-    print("\nIMPORTANT: Custom Python strategies are currently limited.")
-    print("\nThe Strategy base class has protected methods that cannot be")
-    print("directly accessed from Python without modifying the C++ code.")
-    print("\nTo enable custom Python strategies, you need to:")
-    print("  1. Make generate_signal() and get_position() public in strategy.h")
-    print("  2. OR add friend class declarations")
-    print("  3. OR create public wrapper methods")
-    print("\nFor now, use the built-in C++ strategies:")
-    print("  - BuyAndHold")
-    print("  - SMACrossover")
-    print("  - MeanReversion")
-    print("\nOr implement new strategies directly in C++ for best performance.")
-
-    # Example structure (won't work without C++ changes):
-    print("\n# Would need C++ modifications:")
-    print("""
-    class SimpleThreshold(qc.Strategy):
-        def __init__(self):
-            super().__init__("SimpleThreshold")
-            self.prices = {}
-        
-        def on_data(self, event):
-            symbol = event.get_symbol()
-            price = event.get_close()
-            
-            # Track price history
-            if symbol not in self.prices:
-                self.prices[symbol] = []
-            self.prices[symbol].append(price)
-            
-            # Strategy logic here...
-            # Would call self.generate_signal(...) if it was accessible
-    """)
+    return results, bars
 
 
-def example_5_bar_data_inspection():
-    """Example 5: Inspecting bar data"""
-    print("\n" + "=" * 60)
-    print("Example 5: Bar Data Inspection")
-    print("=" * 60)
+def calculate_metrics_example(results, bars):
+    """Example 4: Calculate Performance Metrics"""
+    if not PLOTTING_AVAILABLE:
+        print("\nSkipping metrics calculation (analytics module not available)")
+        return None
 
-    # Load data
-    bars = qc.load_csv_data("../data/test_buy_and_hold.csv", "AAPL")
+    print_section("Example 4: Performance Metrics")
 
-    print(f"Total bars: {len(bars)}")
-    print(f"\nFirst bar:")
-    bar = bars[0]
-    print(f"  Symbol: {bar.symbol}")
-    print(f"  Timestamp: {bar.timestamp_ns}")
-    print(f"  Open: ${bar.open:.2f}")
-    print(f"  High: ${bar.high:.2f}")
-    print(f"  Low: ${bar.low:.2f}")
-    print(f"  Close: ${bar.close:.2f}")
-    print(f"  Volume: {bar.volume:,.0f}")
-    print(f"  Typical Price: ${bar.typical_price():.2f}")
-    print(f"  Range: ${bar.range():.2f}")
-    print(f"  Bullish: {bar.is_bullish()}")
-    print(f"  Bearish: {bar.is_bearish()}")
+    initial_capital = results.get('initial_capital', 100000.0)
+    final_value = results['final_value']
 
-    # Calculate some statistics
-    closes = [b.close for b in bars]
-    print(f"\nPrice Statistics:")
-    print(f"  Min: ${min(closes):.2f}")
-    print(f"  Max: ${max(closes):.2f}")
-    print(f"  Average: ${sum(closes) / len(closes):.2f}")
+    # Build equity curve
+
+    equity_curve = build_equity_curve(initial_capital, final_value, len(bars))
+
+    print("Calculating comprehensive metrics...")
+    metrics = calculate_all_metrics(
+        equity_curve=equity_curve,
+        risk_free_rate=0.02,
+        periods_per_year=252
+    )
+
+    print("\n" + str(metrics))
+
+    return equity_curve, metrics
 
 
-def example_6_execution_config():
-    """Example 6: Custom execution configuration"""
-    print("\n" + "=" * 60)
-    print("Example 6: Custom Execution Configuration")
-    print("=" * 60)
+def visualize_results(equity_curve, bars, strategy_name):
+    """Example 5: Visualize Backtest Results"""
+    if not PLOTTING_AVAILABLE:
+        print("\nSkipping visualization (plotting module not available)")
+        return
 
-    # Create custom execution config
-    config = qc.ExecutionConfig()
-    config.maker_fee = 0.0001  # 1 bps
-    config.taker_fee = 0.0002  # 2 bps
-    config.latency_ns = 1000000  # 1ms
-    config.slippage_pct = 0.0001  # 1 bps
+    print_section("Example 5: Visualization")
 
-    print("Custom execution configuration:")
-    print(f"  Maker fee: {config.maker_fee * 100:.3f}%")
-    print(f"  Taker fee: {config.taker_fee * 100:.3f}%")
-    print(f"  Latency: {config.latency_ns / 1_000_000:.1f}ms")
-    print(f"  Slippage: {config.slippage_pct * 100:.3f}%")
+    # Extract timestamps
+    timestamps = np.array([bar.timestamp_ns for bar in bars])
 
-    print("\nNote: Currently ExecutionEngine needs to be created manually with config.")
-    print("This feature is planned for future releases.")
+    print("Generating plots...")
+
+    # 1. Equity curve
+    print("  - Equity curve with drawdown shading")
+    fig = plot_equity_curve(
+        equity_curve,
+        timestamps,
+        title=f"{strategy_name} - Equity Curve",
+        show_drawdown=True
+    )
+    plt.savefig(f"plots/{strategy_name}_equity.png", dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    # 2. Underwater plot
+    print("  - Underwater plot")
+    fig = plot_underwater(equity_curve, timestamps)
+    plt.savefig(f"plots/{strategy_name}_underwater.png", dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    # 3. Returns distribution
+    print("  - Returns distribution")
+    returns = calculate_returns(equity_curve)
+    fig = plot_returns_distribution(returns)
+    plt.savefig(f"plots/{strategy_name}_returns.png", dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    # 4. Rolling metrics
+    print("  - Rolling metrics")
+    fig = plot_rolling_metrics(returns, timestamps, window=60)
+    plt.savefig(f"plots/{strategy_name}_rolling.png", dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    # 5. Full tearsheet
+    print("  - Full tearsheet")
+    fig = plot_full_tearsheet(
+        equity_curve,
+        returns,
+        timestamps,
+        title=f"{strategy_name} Performance Tearsheet"
+    )
+    plt.savefig(f"plots/{strategy_name}_tearsheet.png", dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"\nAll plots saved to plots/ directory")
+
+
+def compare_strategies(results_list):
+    """Example 6: Strategy Comparison"""
+    print_section("Example 6: Strategy Comparison")
+
+    comparison = pd.DataFrame([
+        {
+            'Strategy': r['strategy'],
+            'Return (%)': r['return_pct'],
+            'Total PnL ($)': r['total_pnl'],
+            'Fees ($)': r['total_fees']
+        }
+        for r in results_list
+    ])
+
+    print("\n" + comparison.to_string(index=False))
+
+    # Find best strategy
+    best_idx = comparison['Return (%)'].idxmax()
+    best = comparison.iloc[best_idx]
+
+    print(f"\nBest Performer: {best['Strategy']} ({best['Return (%)']:.2f}%)")
+
+    if PLOTTING_AVAILABLE:
+        # Visualization
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        x = np.arange(len(comparison))
+        colors = ['#2E86AB' if r > 0 else '#A23B72' for r in comparison['Return (%)']]
+        bars = ax.bar(x, comparison['Return (%)'], 0.6, color=colors, alpha=0.8)
+
+        ax.set_xlabel('Strategy', fontsize=12)
+        ax.set_ylabel('Return (%)', fontsize=12)
+        ax.set_title('Strategy Performance Comparison', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(comparison['Strategy'], rotation=15, ha='right')
+        ax.axhline(y=0, color='black', linestyle='-', linewidth=0.8)
+        ax.grid(True, alpha=0.3, axis='y')
+
+        # Add value labels
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{height:.1f}%',
+                   ha='center', va='bottom' if height > 0 else 'top',
+                   fontweight='bold', fontsize=10)
+
+        plt.tight_layout()
+        plt.savefig('plots/strategy_comparison.png', dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+        print("\nComparison chart saved to plots/strategy_comparison.png")
 
 
 def main():
-    """Run all examples"""
-    print("=" * 60)
-    print("QuantCore Python Bindings - Examples")
-    print("=" * 60)
-    print(f"Version: {qc.version()}")
+    """Main execution"""
+    print("=" * 70)
+    print("  QuantCore - Example Usage")
+    print("=" * 70)
+    print(f"\nVersion: {qc.version()}")
     print(qc.hello())
+    print(f"\nData directory: {DATA_DIR}")
+    print(f"Working directory: {Path.cwd()}")
 
+    # Create plots directory
+    plots_dir = Path("plots")
+    plots_dir.mkdir(exist_ok=True)
+    print(f"Plots directory: {plots_dir.absolute()}")
+
+    results_list = []
+
+    # Example 1: Buy and Hold
     try:
-        example_1_simple_backtest()
+        bh_results, bh_bars = run_buy_and_hold()
+        results_list.append(bh_results)
     except Exception as e:
-        print(f"Error in example 1: {e}")
+        print(f"\nERROR in Buy and Hold: {e}")
 
+    # Example 2: SMA Crossover
     try:
-        example_2_sma_crossover()
-    except Exception as e:
-        print(f"Error in example 2: {e}")
+        sma_results, sma_bars = run_sma_crossover()
+        results_list.append(sma_results)
 
+        # Calculate metrics and visualize for SMA
+        if PLOTTING_AVAILABLE:
+            equity_curve, metrics = calculate_metrics_example(sma_results, sma_bars)
+            if equity_curve is not None:
+                visualize_results(equity_curve, sma_bars, "SMACrossover")
+
+    except Exception as e:
+        print(f"\nERROR in SMA Crossover: {e}")
+
+    # Example 3: Mean Reversion
     try:
-        example_3_mean_reversion()
+        mr_results, mr_bars = run_mean_reversion()
+        results_list.append(mr_results)
     except Exception as e:
-        print(f"Error in example 3: {e}")
+        print(f"\nERROR in Mean Reversion: {e}")
 
-    example_4_custom_strategy()
+    # Example 6: Compare all strategies
+    if len(results_list) > 1:
+        compare_strategies(results_list)
 
-    try:
-        example_5_bar_data_inspection()
-    except Exception as e:
-        print(f"Error in example 5: {e}")
+    # Summary
+    print_section("Summary")
+    print("\nCompleted demonstrations:")
+    print("  ✓ Buy and Hold baseline")
+    print("  ✓ SMA Crossover trend following")
+    print("  ✓ Mean Reversion statistical arbitrage")
 
-    example_6_execution_config()
+    if PLOTTING_AVAILABLE:
+        print("  ✓ Performance metrics calculation")
+        print("  ✓ Visualization generation")
+        print("  ✓ Strategy comparison")
+    else:
+        print("\n  ! Add analytics.py and plotting.py to python/quantcore/ for full features")
 
-    print("\n" + "=" * 60)
-    print("Examples complete!")
-    print("=" * 60)
+    print("\n" + "=" * 70)
+    print("  Examples Complete!")
+    print("=" * 70)
+    print("\nNext steps:")
+    print("  - Check plots/ directory for visualizations")
+    print("  - Run example_backtest.ipynb for interactive analysis")
+    print("  - Implement your own strategies in C++ or Python")
+    print()
 
 
 if __name__ == "__main__":
