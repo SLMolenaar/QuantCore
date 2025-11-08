@@ -57,6 +57,16 @@ MeanReversion = _core.MeanReversion
 # Backtest engine
 BacktestEngine = _core.BacktestEngine
 
+# Position Sizing
+PositionSizingContext = _core.PositionSizingContext
+PositionSizer = _core.PositionSizer
+FixedPercentage = _core.FixedPercentage
+RiskBased = _core.RiskBased
+KellyCriterion = _core.KellyCriterion
+EqualWeight = _core.EqualWeight
+VolatilityTargeting = _core.VolatilityTargeting
+FixedShares = _core.FixedShares
+
 # Utilities
 hello = _core.hello
 version = _core.version
@@ -271,4 +281,13 @@ __all__ = [
     # Utils
     'hello',
     'version',
+    # Position Sizing
+    'PositionSizingContext',
+    'PositionSizer',
+    'FixedPercentage',
+    'RiskBased',
+    'KellyCriterion',
+    'EqualWeight',
+    'VolatilityTargeting',
+    'FixedShares',
 ]

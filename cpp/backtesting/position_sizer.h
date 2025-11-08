@@ -155,7 +155,7 @@ public:
         if (avg_win <= 0.0 || avg_loss <= 0.0) {
             throw std::invalid_argument("Average win and loss must be positive");
         }
-        if (kelly_fraction <= 0.0 || kelly_fraction > 1.0) {
+        if (kelly_fraction_ <= 0.0 || kelly_fraction_ > 1.0) {
             throw std::invalid_argument("Kelly fraction must be between 0 and 1");
         }
     }

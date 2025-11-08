@@ -15,6 +15,7 @@
 #include "strategies/sma_crossover.h"
 #include "strategies/mean_reversion.h"
 #include "Execution.h"
+#include "backtesting/position_sizer.h"
 
 namespace py = pybind11;
 using namespace quantcore;
@@ -281,7 +282,12 @@ PYBIND11_MODULE(_core, m) {
              "Get total fees paid across all symbols")
         .def("get_execution_engine", &BacktestEngine::get_execution_engine,
              py::arg("symbol"),
-             "Get execution engine for a symbol (for inspection)");
+             "Get execution engine for a symbol (for inspection)")
+        .def("set_position_sizer", &BacktestEngine::set_position_sizer,
+             py::arg("sizer"),
+             "Set the position sizing method")
+        .def("get_position_sizer", &BacktestEngine::get_position_sizer,
+             "Get current position sizer");
 
 
     // ============================================================================
