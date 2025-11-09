@@ -9,15 +9,24 @@
 #include <string>
 #include <memory>
 #include <chrono>
-#include <unordered_set>
+#include <unordered_map>
+#include <stdexcept>
+#include <optional>
 
 namespace quantcore {
 
+namespace defaults {
+    constexpr double MAKER_FEE = 0.0001;
+    constexpr double TAKER_FEE = 0.0002;
+    constexpr int64_t LATENCY_NS = 1000000;
+    constexpr double SLIPPAGE_PCT = 0.0001;
+}
+
 struct ExecutionConfig {
-    double maker_fee = 0.0001;
-    double taker_fee = 0.0002;
-    int64_t latency_ns = 1000000;
-    double slippage_pct = 0.0001;
+    double maker_fee = defaults::MAKER_FEE;
+    double taker_fee = defaults::TAKER_FEE;
+    int64_t latency_ns = defaults::LATENCY_NS;
+    double slippage_pct = defaults::SLIPPAGE_PCT;
 };
 
 /**
@@ -39,13 +48,21 @@ public:
         , orderbook_()
         , realized_pnl_(0.0)
         , unrealized_pnl_(0.0)
+        , total_fees_(0.0)
     {
+        if (symbol.empty()) {
+            throw std::invalid_argument("Symbol cannot be empty");
+        }
     }
 
     // execute order through orderbook
     // returns trades tht occurred
     Trades execute_order(OrderPointer order) {
-        orders_owned_.insert(order->GetOrderId());
+        if (!order) {
+            throw std::invalid_argument("Cannot execute null order");
+        }
+
+        orders_owned_[order->GetOrderId()] = order->GetSide();
 
         auto trades = orderbook_.AddOrder(order);
 
@@ -90,15 +107,17 @@ public:
         double position = get_position();
         if (position == 0.0) return 0.0;
 
-        double current_price = get_mid_price();
+        auto mid_price_opt = get_mid_price();
+        if (!mid_price_opt.has_value()) return 0.0;
+
+        double current_price = mid_price_opt.value();
         double avg_price = get_average_price();
 
-        if (current_price == 0.0 || avg_price == 0.0) return 0.0;
+        if (avg_price == 0.0) return 0.0;
 
         return position * (current_price - avg_price);
     }
-    
-    //realized + unrealized
+
     double get_total_pnl() const {
         return realized_pnl_ + get_unrealized_pnl();
     }
@@ -127,14 +146,16 @@ public:
         const auto& asks = infos.GetAsks();
         return asks.empty() ? 0 : asks[0].price_;
     }
-    
+
     // abg of best bid & ask
-    double get_mid_price() const {
+    std::optional<double> get_mid_price() const {
         Price bid = get_best_bid();
         Price ask = get_best_ask();
-        if (bid == 0 && ask == 0) return 0.0;
+
+        if (bid == 0 && ask == 0) return std::nullopt;
         if (bid == 0) return ask / 100.0;
         if (ask == 0) return bid / 100.0;
+
         return (bid + ask) / 200.0; // cents to dollars and average
     }
 
@@ -173,11 +194,11 @@ private:
     // Position tracking, symbol & quantity
     std::map<std::string, double> positions_;
     std::map<std::string, double> avg_prices_;
-    std::unordered_set<OrderId> orders_owned_;
+    std::unordered_map<OrderId, Side> orders_owned_;
 
     double realized_pnl_;
     double unrealized_pnl_;
-    double total_fees_ = 0.0;
+    double total_fees_;
 
     void update_position(const Trade& trade) {
         const auto& bid_trade = trade.GetBidTrade();
@@ -187,8 +208,11 @@ private:
         double quantity = static_cast<double>(bid_trade.quantity_);
         double price = static_cast<double>(bid_trade.price_) / 100.0;
 
-        bool we_are_buyer = orders_owned_.contains(bid_trade.orderId_);
-        bool we_are_seller = orders_owned_.contains(ask_trade.orderId_);
+        auto bid_it = orders_owned_.find(bid_trade.orderId_);
+        auto ask_it = orders_owned_.find(ask_trade.orderId_);
+
+        bool we_are_buyer = (bid_it != orders_owned_.end() && bid_it->second == Side::Buy);
+        bool we_are_seller = (ask_it != orders_owned_.end() && ask_it->second == Side::Sell);
 
         if (!we_are_buyer && !we_are_seller) {
             return;
@@ -274,13 +298,13 @@ private:
         }
     }
 
-    double calculate_fee(double price, double quantity, bool is_maker) {
+    double calculate_fee(double price, double quantity, bool is_maker) const {
         double notional = price * quantity;
         double fee_rate = is_maker ? config_.maker_fee : config_.taker_fee;
         return notional * fee_rate;
     }
 
-    double calculate_slippage(double price, double quantity) {
+    double calculate_slippage(double price, double quantity) const {
         return price * quantity * config_.slippage_pct;
     }
 };

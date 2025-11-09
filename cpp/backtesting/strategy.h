@@ -39,7 +39,7 @@ public:
      * Override this to implement your strategy logic
      */
     virtual void on_data(const MarketDataEvent& event) = 0;
-    
+
     /**
      * Called when an order is filled
      * Override to react to fills (optional)
@@ -54,9 +54,9 @@ public:
     
     //Get signals generated since last check
     std::vector<std::shared_ptr<SignalEvent>> get_signals() {
-        auto signals = signals_;
-        signals_.clear();
-        return signals;
+        std::vector<std::shared_ptr<SignalEvent>> temp;
+        temp.swap(signals_);
+        return temp;
     }
 
     // Check if strat has pending signals

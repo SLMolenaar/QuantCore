@@ -5,7 +5,7 @@
 #include <deque>
 #include <numeric>
 #include <cmath>
-#include <iostream>
+#include <stdexcept>
 
 namespace quantcore {
 
@@ -16,7 +16,20 @@ public:
         , lookback_(lookback)
         , entry_threshold_(entry_threshold)
         , exit_threshold_(exit_threshold)
+        , signal_count_(0)
     {
+        if (lookback == 0) {
+            throw std::invalid_argument("Lookback period must be greater than 0");
+        }
+        if (entry_threshold <= 0.0) {
+            throw std::invalid_argument("Entry threshold must be positive");
+        }
+        if (exit_threshold < 0.0) {
+            throw std::invalid_argument("Exit threshold must be non-negative");
+        }
+        if (exit_threshold >= entry_threshold) {
+            throw std::invalid_argument("Exit threshold must be less than entry threshold");
+        }
     }
 
     void on_data(const MarketDataEvent& event) override {
@@ -73,7 +86,7 @@ private:
     size_t lookback_;
     double entry_threshold_;
     double exit_threshold_;
-    int signal_count_ = 0;
+    int signal_count_;
 
     std::map<std::string, std::deque<double>> price_history_;
 
