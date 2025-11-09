@@ -13,6 +13,7 @@
 #include <memory>
 #include <map>
 #include <vector>
+#include <stdexcept>
 
 namespace quantcore {
 
@@ -34,20 +35,35 @@ public:
         , next_order_id_(1)
         , position_sizer_(std::make_shared<FixedPercentage>(0.1))
     {
+        if (initial_capital <= 0.0) {
+            throw std::invalid_argument("Initial capital must be positive");
+        }
     }
 
     /**
      * Add market data to backtest
      */
     void add_data(const std::string& symbol, const BarSeries& bars) {
+        if (symbol.empty()) {
+            throw std::invalid_argument("Symbol cannot be empty");
+        }
+        if (bars.empty()) {
+            throw std::invalid_argument("Cannot add empty bar series");
+        }
         market_data_[symbol] = bars;
     }
 
     void set_strategy(std::shared_ptr<Strategy> strategy) {
+        if (!strategy) {
+            throw std::invalid_argument("Strategy cannot be null");
+        }
         strategy_ = strategy;
     }
 
     void set_position_sizer(PositionSizerPtr sizer) {
+        if (!sizer) {
+            throw std::invalid_argument("Position sizer cannot be null");
+        }
         position_sizer_ = sizer;
     }
 
@@ -245,8 +261,8 @@ private:
             current_capital_,
             current_price,
             current_position,
-            0.02,  // portfolio_volatility - could be calculated from returns
-            0.05   // stop_loss_distance - could come from strategy
+            0.02,  // portfolio_volatility, could be calculated from returns
+            0.05   // stop_loss_distance, could come from strategy
         );
 
         double target_shares = position_sizer_->calculate_size(ctx);
@@ -257,16 +273,11 @@ private:
             spread_pct = mm_it->second->get_spread();
         }
 
-        Side order_side;
         double order_price;
-
         if (signal->get_signal_type() == SignalType::BUY) {
-            order_side = Side::Buy;
             order_price = current_price * (1.0 + spread_pct / 2.0);
         } else if (signal->get_signal_type() == SignalType::SELL) {
-            order_side = Side::Sell;
             order_price = current_price * (1.0 - spread_pct / 2.0);
-            target_shares = -target_shares;
         } else {
             return;
         }
@@ -277,6 +288,7 @@ private:
             return;
         }
 
+        Side order_side;
         if (position_delta > 0) {
             order_side = Side::Buy;
         } else {
@@ -302,7 +314,7 @@ private:
 
         auto it = execution_engines_.find(order_event->get_symbol());
         if (it == execution_engines_.end()) {
-            return;
+            throw std::runtime_error("No execution engine for symbol: " + order_event->get_symbol());
         }
 
         auto engine = it->second;
