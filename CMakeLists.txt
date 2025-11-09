@@ -47,7 +47,8 @@ add_executable(QuantCore ${CPP_SOURCES}
         cpp/strategies/sma_crossover.h
         cpp/strategies/mean_reversion.h
         cpp/backtesting/market_maker.h
-        cpp/backtesting/position_sizer.h)
+        cpp/backtesting/position_sizer.h
+)
 
 # Link libraries if needed
 # target_link_libraries(QuantCore pthread)

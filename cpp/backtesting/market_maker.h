@@ -2,7 +2,11 @@
 
 #include "../Execution.h"
 #include "market_data_event.h"
-#include <memory>
+#include <vector>
+#include <cmath>
+#include <algorithm>
+#include <random>
+#include <deque>
 
 namespace quantcore {
 
@@ -15,74 +19,153 @@ namespace quantcore {
  *
  * Without this, strategies would have no liquidity to trade against.
  */
+
 class MarketMaker {
 public:
-    MarketMaker(double spread_pct = 0.001, Quantity depth = 10000)
-        : spread_pct_(spread_pct)
-        , depth_(depth)
+    MarketMaker(
+        double base_spread_pct = 0.0001,
+        int num_levels = 5,
+        Quantity base_depth = 10000
+    )
+        : base_spread_pct_(base_spread_pct)
+        , current_spread_pct_(base_spread_pct)
+        , num_levels_(num_levels)
+        , base_depth_(base_depth)
         , next_order_id_(10000000000000ULL)
+        , rng_(std::random_device{}())
     {
     }
 
     void update_quotes(ExecutionEngine& engine, const MarketDataEvent& event) {
-        cancel_old_orders(engine);
+        cancel_orders(engine);
 
         double mid_price = event.get_close();
-        double half_spread = mid_price * spread_pct_ / 2.0;
+        double volume = event.get_volume();
+        int64_t timestamp = event.get_timestamp();
 
-        Price bid_price = static_cast<Price>((mid_price - half_spread) * 100.0);
-        Price ask_price = static_cast<Price>((mid_price + half_spread) * 100.0);
+        price_history_.push_back(mid_price);
+        if (price_history_.size() > 20) {
+            price_history_.pop_front();
+        }
 
-        auto bid_order = std::make_shared<Order>(
-            OrderType::GoodTillCancel,
-            next_order_id_++,
-            Side::Buy,
-            bid_price,
-            depth_
-        );
+        double volatility = calc_volatility();
+        double time_factor = get_time_factor(timestamp);
 
-        auto ask_order = std::make_shared<Order>(
-            OrderType::GoodTillCancel,
-            next_order_id_++,
-            Side::Sell,
-            ask_price,
-            depth_
-        );
+        update_spread(volatility, volume, time_factor);
 
-        auto& orderbook = engine.get_orderbook();
-        orderbook.AddOrder(bid_order);
-        orderbook.AddOrder(ask_order);
-
-        active_bid_ = bid_order->GetOrderId();
-        active_ask_ = ask_order->GetOrderId();
+        place_orders(engine, mid_price, volume, Side::Buy);
+        place_orders(engine, mid_price, volume, Side::Sell);
     }
 
-    void set_spread(double spread_pct) {
-        spread_pct_ = spread_pct;
+    double get_spread() const { return current_spread_pct_; }
+
+    void set_num_levels(int levels) {
+        num_levels_ = std::max(1, std::min(10, levels));
     }
 
-    void set_depth(Quantity depth) {
-        depth_ = depth;
+    void set_base_spread(double spread) {
+        base_spread_pct_ = std::max(0.00001, spread);
     }
 
-    double get_spread() const {
-        return spread_pct_;
+    void set_base_depth(Quantity depth) {
+        base_depth_ = std::max(static_cast<Quantity>(100), depth);
     }
 
 private:
-    double spread_pct_;
-    Quantity depth_;
+    double base_spread_pct_;
+    double current_spread_pct_;
+    int num_levels_;
+    Quantity base_depth_;
     uint64_t next_order_id_;
-    OrderId active_bid_ = 0;
-    OrderId active_ask_ = 0;
 
-    void cancel_old_orders(ExecutionEngine& engine) {
-        if (active_bid_ != 0) {
-            engine.get_orderbook().CancelOrder(active_bid_);
+    std::deque<double> price_history_;
+    std::vector<OrderId> active_orders_;
+    mutable std::mt19937 rng_;
+
+    void cancel_orders(ExecutionEngine& engine) {
+        auto& orderbook = engine.get_orderbook();
+        for (OrderId id : active_orders_) {
+            orderbook.CancelOrder(id);
         }
-        if (active_ask_ != 0) {
-            engine.get_orderbook().CancelOrder(active_ask_);
+        active_orders_.clear();
+    }
+
+    void place_orders(ExecutionEngine& engine, double mid_price,
+                     double volume, Side side) {
+        auto& orderbook = engine.get_orderbook();
+
+        for (int level = 0; level < num_levels_; ++level) {
+            double offset = (level + 0.5) * current_spread_pct_;
+
+            double price = (side == Side::Buy)
+                ? mid_price * (1.0 - offset)
+                : mid_price * (1.0 + offset);
+
+            Price price_cents = static_cast<Price>(price * 100.0);
+            Quantity quantity = calc_quantity(level, volume);
+
+            auto order = std::make_shared<Order>(
+                OrderType::GoodTillCancel,
+                next_order_id_++,
+                side,
+                price_cents,
+                quantity
+            );
+
+            orderbook.AddOrder(order);
+            active_orders_.push_back(order->GetOrderId());
         }
+    }
+
+    Quantity calc_quantity(int level, double volume) const {
+        double decay = std::exp(-0.3 * level);
+        double vol_factor = 1.0 + std::log1p(volume / 1000000.0) * 0.1;
+
+        Quantity base = static_cast<Quantity>(base_depth_ * decay * vol_factor);
+
+        std::uniform_real_distribution<double> dist(0.9, 1.1);
+        return static_cast<Quantity>(base * dist(rng_));
+    }
+
+    double calc_volatility() const {
+        if (price_history_.size() < 2) return 0.02;
+
+        std::vector<double> returns;
+        for (size_t i = 1; i < price_history_.size(); ++i) {
+            returns.push_back((price_history_[i] - price_history_[i-1]) / price_history_[i-1]);
+        }
+
+        double mean = 0.0;
+        for (double r : returns) mean += r;
+        mean /= returns.size();
+
+        double var = 0.0;
+        for (double r : returns) {
+            double diff = r - mean;
+            var += diff * diff;
+        }
+        var /= returns.size();
+
+        return std::max(0.001, std::sqrt(var) * 10.0);
+    }
+
+    void update_spread(double vol, double volume, double time_factor) {
+        double spread = base_spread_pct_;
+
+        spread *= (1.0 + (vol / 0.02 - 1.0) * 0.5);
+        spread *= (1.0 + std::max(0.0, (1000000.0 - volume) / 1000000.0) * 0.3);
+        spread *= time_factor;
+
+        current_spread_pct_ = std::max(base_spread_pct_ * 0.5,
+                                       std::min(base_spread_pct_ * 3.0, spread));
+    }
+
+    double get_time_factor(int64_t timestamp_ns) const {
+        int hour = ((timestamp_ns / 1000000000LL) % 86400 / 3600) % 24;
+
+        if (hour < 9 || hour >= 16) return 2.0;
+        if (hour == 9 || hour == 15) return 1.5;
+        return 1.0;
     }
 };
 
