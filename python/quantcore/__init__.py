@@ -165,6 +165,8 @@ def run_backtest(
     final_value = engine.run()
     total_pnl = engine.get_total_pnl()
     total_fees = engine.get_total_fees()
+    equity_curve = engine.get_equity_curve()
+    timestamps = engine.get_timestamps()
 
     return {
         'strategy': strategy.get_name(),
@@ -172,7 +174,9 @@ def run_backtest(
         'final_value': final_value,
         'total_pnl': total_pnl,
         'total_fees': total_fees,
-        'return_pct': ((final_value / initial_capital) - 1.0) * 100.0
+        'return_pct': ((final_value / initial_capital) - 1.0) * 100.0,
+        'equity_curve': equity_curve,
+        'timestamps': timestamps
     }
 
 
