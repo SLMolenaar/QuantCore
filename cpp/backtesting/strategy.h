@@ -3,6 +3,7 @@
 #include "market_data_event.h"
 #include "signal_event.h"
 #include "fill_event.h"
+#include "portfolio_context.h"
 #include <memory>
 #include <string>
 #include <map>
@@ -15,22 +16,15 @@ namespace quantcore {
  * Users implement their strategy by inheriting from this class
  * and overriding the on_data() method.
  * 
- * Example:
- *   class MeanReversion : public Strategy {
- *       void on_data(const MarketDataEvent& event) override {
- *           // strategy logic here
- *           if (should_buy) {
- *               generate_signal(event.get_symbol(), SignalType::BUY);
- *           }
- *       }
- *   };
+ * Single-asset strategies can use get_position(symbol) as before.
+ * Multi-asset strategies use get_portfolio() for portfolio-level logic.
  */
 class Strategy {
 public:
     Strategy(const std::string& name = "Strategy")
         : name_(name)
-    {
-    }
+        , portfolio_(nullptr)
+    {}
     
     virtual ~Strategy() = default;
     
@@ -45,26 +39,21 @@ public:
      * Override to react to fills (optional)
      */
     virtual void on_fill(const FillEvent& event) {
-        // Default: do nothing
         (void)event;
     }
 
-    // strat name
     std::string get_name() const { return name_; }
     
-    //Get signals generated since last check
     std::vector<std::shared_ptr<SignalEvent>> get_signals() {
         std::vector<std::shared_ptr<SignalEvent>> temp;
         temp.swap(signals_);
         return temp;
     }
 
-    // Check if strat has pending signals
     bool has_signals() const {
         return !signals_.empty();
     }
 
-    // Reset strat state (for new backtest run)
     virtual void reset() {
         signals_.clear();
         positions_.clear();
@@ -80,7 +69,6 @@ protected:
         signals_.push_back(signal);
     }
 
-    // Updated by backtesting engine(will implement later)
     void set_position(const std::string& symbol, double quantity) {
         positions_[symbol] = quantity;
     }
@@ -93,13 +81,29 @@ protected:
     bool has_position(const std::string& symbol) const {
         return get_position(symbol) != 0.0;
     }
+
+    /**
+     * Get portfolio context for multi-asset strategies
+     * Returns nullptr if not set by engine yet
+     */
+    PortfolioContext* get_portfolio() const {
+        return portfolio_;
+    }
+
+    /**
+     * Check if portfolio context is available
+     */
+    bool has_portfolio_context() const {
+        return portfolio_ != nullptr;
+    }
     
 private:
     std::string name_;
     std::vector<std::shared_ptr<SignalEvent>> signals_;
-    std::map<std::string, double> positions_;  // symbol, quantity
+    std::map<std::string, double> positions_;
+    PortfolioContext* portfolio_;
     
-    friend class BacktestEngine;  // Allow engine to update positions
+    friend class BacktestEngine;
 };
 
 }

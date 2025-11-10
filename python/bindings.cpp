@@ -17,6 +17,8 @@
 #include "Execution.h"
 #include "backtesting/position_sizer.h"
 #include "backtesting/risk_manager.h"
+#include "backtesting/portfolio_context.h"
+#include "strategies/pairs_trading.h"
 
 namespace py = pybind11;
 using namespace quantcore;
@@ -260,6 +262,15 @@ PYBIND11_MODULE(_core, m) {
         .def("get_signal_count", &MeanReversion::get_signal_count,
              "Get number of signals generated");
 
+    py::class_<PairsTrading, Strategy, std::shared_ptr<PairsTrading>>(m, "PairsTrading")
+        .def(py::init<std::string, std::string, size_t, double, double>(),
+             py::arg("symbol1"),
+             py::arg("symbol2"),
+             py::arg("lookback") = 20,
+             py::arg("entry_zscore") = 2.0,
+             py::arg("exit_zscore") = 0.5,
+             "Pairs trading strategy - statistical arbitrage between two correlated assets");
+
     // ============================================================================
     // BACKTEST ENGINE
     // ============================================================================
@@ -406,6 +417,47 @@ PYBIND11_MODULE(_core, m) {
         .def("update_position", &RiskManager::update_position)
         .def("reset", &RiskManager::reset)
         .def("get_all_positions", &RiskManager::get_all_positions);
+
+
+    // ============================================================================
+    // PORTFOLIO CONTEXT
+    // ============================================================================
+
+    py::class_<PortfolioContext, std::shared_ptr<PortfolioContext>>(m, "PortfolioContext")
+        .def(py::init<double>(),
+             py::arg("initial_capital"),
+             "Create portfolio context")
+        .def("get_cash", &PortfolioContext::get_cash,
+             "Get available cash")
+        .def("get_initial_capital", &PortfolioContext::get_initial_capital,
+             "Get initial capital")
+        .def("get_position", &PortfolioContext::get_position,
+             py::arg("symbol"),
+             "Get position for a symbol")
+        .def("get_price", &PortfolioContext::get_price,
+             py::arg("symbol"),
+             "Get current price for a symbol")
+        .def("get_position_value", &PortfolioContext::get_position_value,
+             py::arg("symbol"),
+             "Get market value of position")
+        .def("get_total_position_value", &PortfolioContext::get_total_position_value,
+             "Get total value of all positions")
+        .def("get_portfolio_value", &PortfolioContext::get_portfolio_value,
+             "Get total portfolio value (cash + positions)")
+        .def("get_leverage", &PortfolioContext::get_leverage,
+             "Get portfolio leverage ratio")
+        .def("get_position_weight", &PortfolioContext::get_position_weight,
+             py::arg("symbol"),
+             "Get position weight as % of portfolio")
+        .def("get_all_positions", &PortfolioContext::get_all_positions,
+             "Get all positions as dict")
+        .def("get_all_prices", &PortfolioContext::get_all_prices,
+             "Get all current prices as dict")
+        .def("num_positions", &PortfolioContext::num_positions,
+             "Get number of open positions")
+        .def("has_position", &PortfolioContext::has_position,
+             py::arg("symbol"),
+             "Check if has position in symbol");
 
     // ============================================================================
     // UTILITY FUNCTIONS

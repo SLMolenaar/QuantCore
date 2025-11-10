@@ -10,6 +10,7 @@
 #include "market_maker.h"
 #include "position_sizer.h"
 #include "risk_manager.h"
+#include "portfolio_context.h"
 #include "../Execution.h"
 #include <memory>
 #include <map>
@@ -26,6 +27,7 @@ public:
         , next_order_id_(1)
         , position_sizer_(std::make_shared<FixedPercentage>(0.1))
         , risk_manager_(std::make_shared<RiskManager>())
+        , portfolio_(std::make_shared<PortfolioContext>(initial_capital))
         , mm_levels_(5)
         , mm_spread_(0.0001)
         , mm_depth_(100000)
@@ -51,6 +53,7 @@ public:
             throw std::invalid_argument("Strategy cannot be null");
         }
         strategy_ = strategy;
+        strategy_->portfolio_ = portfolio_.get();
     }
 
     void set_position_sizer(PositionSizerPtr sizer) {
@@ -100,6 +103,9 @@ public:
         risk_manager_->reset();
         risk_manager_->set_capital(initial_capital_, initial_capital_);
 
+        portfolio_ = std::make_shared<PortfolioContext>(initial_capital_);
+        strategy_->portfolio_ = portfolio_.get();
+
         equity_curve_.clear();
         timestamps_.clear();
 
@@ -134,6 +140,7 @@ public:
             }
 
             if (event->get_type() == EventType::MARKET_DATA) {
+                update_portfolio_context();
                 double portfolio_value = calculate_portfolio_value();
                 equity_curve_.push_back(portfolio_value);
                 timestamps_.push_back(event->get_timestamp());
@@ -165,6 +172,10 @@ public:
         return it != execution_engines_.end() ? it->second : nullptr;
     }
 
+    std::shared_ptr<PortfolioContext> get_portfolio_context() const {
+        return portfolio_;
+    }
+
     std::vector<double> get_equity_curve() const { return equity_curve_; }
     std::vector<int64_t> get_timestamps() const { return timestamps_; }
 
@@ -182,6 +193,7 @@ private:
 
     PositionSizerPtr position_sizer_;
     std::shared_ptr<RiskManager> risk_manager_;
+    std::shared_ptr<PortfolioContext> portfolio_;
 
     std::vector<double> equity_curve_;
     std::vector<int64_t> timestamps_;
@@ -200,6 +212,19 @@ private:
                 event_queue_.push(event);
             }
         }
+    }
+
+    void update_portfolio_context() {
+        for (const auto& [symbol, price] : last_prices_) {
+            portfolio_->update_price(symbol, price);
+        }
+
+        for (const auto& [symbol, engine] : execution_engines_) {
+            portfolio_->update_position(symbol, engine->get_position());
+        }
+
+        double total_pnl = get_total_pnl();
+        portfolio_->set_cash(current_capital_ + total_pnl);
     }
 
     void handle_market_data(EventPtr event) {
