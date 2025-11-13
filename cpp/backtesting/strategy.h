@@ -3,40 +3,37 @@
 #include "market_data_event.h"
 #include "signal_event.h"
 #include "fill_event.h"
+#include "portfolio_context.h"
 #include <memory>
 #include <string>
 #include <map>
 
 namespace quantcore {
 
-// Base for all trading strategies
-// Inherit and override on_data() to implement your logic
+// Base for trading strategies - override on_data() to implement your own logic
 class Strategy {
 public:
-    Strategy(const std::string& name = "Strategy") : name_(name) {}
+    Strategy(const std::string& name = "Strategy") : name_(name), portfolio_(nullptr) {}
 
     virtual ~Strategy() = default;
 
-    // Called on each bar/tick, implement your logic here
+    // Called on each bar, implement your logic here
     virtual void on_data(const MarketDataEvent& event) = 0;
 
-    // Called after fills, optional to override
+    // Called after fills, optional
     virtual void on_fill(const FillEvent& event) {
         (void)event;
     }
 
     std::string get_name() const { return name_; }
 
-    // Get and clear pending signals
     std::vector<std::shared_ptr<SignalEvent>> get_signals() {
         std::vector<std::shared_ptr<SignalEvent>> temp;
         temp.swap(signals_);
         return temp;
     }
 
-    bool has_signals() const {
-        return !signals_.empty();
-    }
+    bool has_signals() const { return !signals_.empty(); }
 
     virtual void reset() {
         signals_.clear();
@@ -44,7 +41,6 @@ public:
     }
 
 protected:
-    // Generate buy/sell signal
     void generate_signal(const std::string& symbol,
                         SignalType sig_type,
                         double strength = 1.0,
@@ -54,7 +50,6 @@ protected:
         signals_.push_back(sig);
     }
 
-    // Position tracking (updated by engine)
     void set_position(const std::string& symbol, double qty) {
         positions_[symbol] = qty;
     }
@@ -68,10 +63,20 @@ protected:
         return get_position(symbol) != 0.0;
     }
 
+    // Access to portfolio state for multi-asset strategies
+    PortfolioContext* get_portfolio() const {
+        return portfolio_;
+    }
+
+    bool has_portfolio_context() const {
+        return portfolio_ != nullptr;
+    }
+
 private:
     std::string name_;
     std::vector<std::shared_ptr<SignalEvent>> signals_;
-    std::map<std::string, double> positions_;  // symbol -> qty
+    std::map<std::string, double> positions_;
+    PortfolioContext* portfolio_;
 
     friend class BacktestEngine;
 };
