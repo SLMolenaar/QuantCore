@@ -67,6 +67,12 @@ EqualWeight = _core.EqualWeight
 VolatilityTargeting = _core.VolatilityTargeting
 FixedShares = _core.FixedShares
 
+# Risk Management
+RiskCheckResult = _core.RiskCheckResult
+RiskCheckResponse = _core.RiskCheckResponse
+RiskLimits = _core.RiskLimits
+RiskManager = _core.RiskManager
+
 # Utilities
 hello = _core.hello
 version = _core.version

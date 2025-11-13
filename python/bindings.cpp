@@ -16,6 +16,9 @@
 #include "strategies/mean_reversion.h"
 #include "Execution.h"
 #include "backtesting/position_sizer.h"
+#include "backtesting/risk_manager.h"
+#include "backtesting/portfolio_context.h"
+#include "strategies/pairs_trading.h"
 
 namespace py = pybind11;
 using namespace quantcore;
@@ -259,6 +262,15 @@ PYBIND11_MODULE(_core, m) {
         .def("get_signal_count", &MeanReversion::get_signal_count,
              "Get number of signals generated");
 
+    py::class_<PairsTrading, Strategy, std::shared_ptr<PairsTrading>>(m, "PairsTrading")
+        .def(py::init<std::string, std::string, size_t, double, double>(),
+             py::arg("symbol1"),
+             py::arg("symbol2"),
+             py::arg("lookback") = 20,
+             py::arg("entry_zscore") = 2.0,
+             py::arg("exit_zscore") = 0.5,
+             "Pairs trading strategy - statistical arbitrage between two correlated assets");
+
     // ============================================================================
     // BACKTEST ENGINE
     // ============================================================================
@@ -291,7 +303,10 @@ PYBIND11_MODULE(_core, m) {
         .def("get_equity_curve", &BacktestEngine::get_equity_curve,
              "Get portfolio value over time")
         .def("get_timestamps", &BacktestEngine::get_timestamps,
-             "Get timestamps corresponding to equity curve");
+             "Get timestamps corresponding to equity curve")
+        .def("set_risk_limits", &BacktestEngine::set_risk_limits)
+        .def("get_risk_limits", &BacktestEngine::get_risk_limits)
+        .def("get_risk_manager", &BacktestEngine::get_risk_manager);
 
 
     // ============================================================================
@@ -363,6 +378,86 @@ PYBIND11_MODULE(_core, m) {
              py::arg("num_shares"),
              "Fixed number of shares per signal");
 
+    //============================================================================
+    // RISK MANAGEMENT
+    // ============================================================================
+
+    py::enum_<RiskCheckResult>(m, "RiskCheckResult")
+        .value("APPROVED", RiskCheckResult::APPROVED)
+        .value("REJECTED_POSITION_LIMIT", RiskCheckResult::REJECTED_POSITION_LIMIT)
+        .value("REJECTED_LEVERAGE_LIMIT", RiskCheckResult::REJECTED_LEVERAGE_LIMIT)
+        .value("REJECTED_CAPITAL_LIMIT", RiskCheckResult::REJECTED_CAPITAL_LIMIT)
+        .value("REJECTED_LOSS_LIMIT", RiskCheckResult::REJECTED_LOSS_LIMIT)
+        .value("REJECTED_ORDER_SIZE", RiskCheckResult::REJECTED_ORDER_SIZE);
+
+    py::class_<RiskCheckResponse>(m, "RiskCheckResponse")
+        .def(py::init<>())
+        .def_readwrite("result", &RiskCheckResponse::result)
+        .def_readwrite("reason", &RiskCheckResponse::reason)
+        .def("is_approved", &RiskCheckResponse::is_approved);
+
+    py::class_<RiskLimits>(m, "RiskLimits")
+        .def(py::init<>())
+        .def_readwrite("max_position_pct", &RiskLimits::max_position_pct)
+        .def_readwrite("max_leverage", &RiskLimits::max_leverage)
+        .def_readwrite("max_loss_pct", &RiskLimits::max_loss_pct)
+        .def_readwrite("max_order_value", &RiskLimits::max_order_value)
+        .def_readwrite("enabled", &RiskLimits::enabled)
+        .def("validate", &RiskLimits::validate);
+
+    py::class_<RiskManager, std::shared_ptr<RiskManager>>(m, "RiskManager")
+        .def(py::init<>())
+        .def(py::init<const RiskLimits&>())
+        .def("set_capital", &RiskManager::set_capital)
+        .def("set_position", &RiskManager::set_position)
+        .def("get_position", &RiskManager::get_position)
+        .def("set_limits", &RiskManager::set_limits)
+        .def("get_limits", &RiskManager::get_limits)
+        .def("check_order", &RiskManager::check_order)
+        .def("update_position", &RiskManager::update_position)
+        .def("reset", &RiskManager::reset)
+        .def("get_all_positions", &RiskManager::get_all_positions);
+
+
+    // ============================================================================
+    // PORTFOLIO CONTEXT
+    // ============================================================================
+
+    py::class_<PortfolioContext, std::shared_ptr<PortfolioContext>>(m, "PortfolioContext")
+        .def(py::init<double>(),
+             py::arg("initial_capital"),
+             "Create portfolio context")
+        .def("get_cash", &PortfolioContext::get_cash,
+             "Get available cash")
+        .def("get_initial_capital", &PortfolioContext::get_initial_capital,
+             "Get initial capital")
+        .def("get_position", &PortfolioContext::get_position,
+             py::arg("symbol"),
+             "Get position for a symbol")
+        .def("get_price", &PortfolioContext::get_price,
+             py::arg("symbol"),
+             "Get current price for a symbol")
+        .def("get_position_value", &PortfolioContext::get_position_value,
+             py::arg("symbol"),
+             "Get market value of position")
+        .def("get_total_position_value", &PortfolioContext::get_total_position_value,
+             "Get total value of all positions")
+        .def("get_portfolio_value", &PortfolioContext::get_portfolio_value,
+             "Get total portfolio value (cash + positions)")
+        .def("get_leverage", &PortfolioContext::get_leverage,
+             "Get portfolio leverage ratio")
+        .def("get_position_weight", &PortfolioContext::get_position_weight,
+             py::arg("symbol"),
+             "Get position weight as % of portfolio")
+        .def("get_all_positions", &PortfolioContext::get_all_positions,
+             "Get all positions as dict")
+        .def("get_all_prices", &PortfolioContext::get_all_prices,
+             "Get all current prices as dict")
+        .def("num_positions", &PortfolioContext::num_positions,
+             "Get number of open positions")
+        .def("has_position", &PortfolioContext::has_position,
+             py::arg("symbol"),
+             "Check if has position in symbol");
 
     // ============================================================================
     // UTILITY FUNCTIONS
