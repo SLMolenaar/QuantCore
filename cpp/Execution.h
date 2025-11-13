@@ -29,16 +29,7 @@ struct ExecutionConfig {
     double slippage_pct = defaults::SLIPPAGE_PCT;
 };
 
-/**
- * Wrapper around Orderbook for backtesting
- * 
- * Adds backtesting-specific features on top of the orderbook:
- * - Fee calculation
- * - Slippage simulation
- * - Position tracking
- * - PnL calculation (realized + unrealized)
- * - Latency simulation
- */
+// Execution engine wrapping orderbook with backtesting features
 class ExecutionEngine {
 public:
     ExecutionEngine(const std::string& symbol = "DEFAULT",

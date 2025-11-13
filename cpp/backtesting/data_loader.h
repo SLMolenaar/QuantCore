@@ -8,9 +8,8 @@
 #include <iostream>
 
 namespace quantcore {
-    /**
-     * Load OHLCV data from CSV files
-     */
+
+    // load ohlcv from csv
     class CSVDataLoader {
     public:
         static BarSeries load(const std::string& filepath,
@@ -23,24 +22,24 @@ namespace quantcore {
 
             BarSeries bars;
             std::string line;
-            size_t line_number = 0;
+            size_t line_nr = 0;
             size_t skipped_lines = 0;
 
-            // Skip header if present
+            // Skip header
             if (has_header) {
                 std::getline(file, line);
-                line_number++;
+                line_nr++;
             }
 
             while (std::getline(file, line)) {
-                line_number++;
+                line_nr++;
                 if (line.empty()) continue;
 
                 try {
                     auto bar = parse_line(line, symbol);
                     bars.push_back(bar);
                 } catch (const std::exception& e) {
-                    std::cerr << "Warning: Skipping line " << line_number
+                    std::cerr << "skipping line " << line_nr
                               << " in " << filepath << ": " << e.what() << "\n";
                     skipped_lines++;
                     continue;
@@ -48,15 +47,15 @@ namespace quantcore {
             }
 
             if (skipped_lines > 0) {
-                std::cerr << "Warning: Skipped " << skipped_lines
-                          << " invalid lines out of " << line_number << " total lines\n";
+                std::cerr << "Skipped " << skipped_lines
+                          << " lines out of " << line_nr << " total lines\n";
             }
 
             if (bars.empty()) {
                 throw std::runtime_error("No valid data loaded from file: " + filepath);
             }
 
-            // Sort by timestamp (just in case)
+            // sort by timestamp (just in case)
             std::sort(bars.begin(), bars.end(),
                       [](const BarData& a, const BarData& b) {
                           return a.timestamp_ns < b.timestamp_ns;
@@ -71,16 +70,15 @@ namespace quantcore {
             std::string token;
             std::vector<std::string> tokens;
 
-            // Split by comma
+            // Split with comma
             while (std::getline(ss, token, ',')) {
                 tokens.push_back(token);
             }
 
             BarData bar;
 
-            // Parse based on number of columns
+            // Parse based on nr of cols
             if (tokens.size() == 6) {
-                // timestamp,open,high,low,close,volume
                 bar.symbol = default_symbol;
                 bar.timestamp_ns = parse_timestamp(tokens[0]);
                 bar.open = std::stod(tokens[1]);
@@ -89,7 +87,6 @@ namespace quantcore {
                 bar.close = std::stod(tokens[4]);
                 bar.volume = std::stod(tokens[5]);
             } else if (tokens.size() == 7) {
-                // symbol,timestamp,open,high,low,close,volume
                 bar.symbol = tokens[0];
                 bar.timestamp_ns = parse_timestamp(tokens[1]);
                 bar.open = std::stod(tokens[2]);
@@ -109,15 +106,14 @@ namespace quantcore {
             try {
                 int64_t ts = std::stoll(ts_str);
 
-                // If timestamp looks like seconds, convert to nanoseconds
+                // If timestamp in seconds, convert to nanoseconds
                 if (ts < 4000000000LL) {
                     return ts * 1000000000LL;
                 }
-                // If timestamp looks like milliseconds, convert to nanoseconds
+                // If timestamp in milliseconds, convert to nanoseconds
                 else if (ts < 4000000000000LL) {
                     return ts * 1000000LL;
                 }
-                // Otherwise assume already in nanoseconds
                 else {
                     return ts;
                 }

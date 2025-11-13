@@ -7,14 +7,7 @@
 
 namespace quantcore {
 
-    /**
-     * Priority queue for events ordered by timestamp
-     *
-     * Ensures events are processed in chronological order,
-     * preventing look-ahead bias in backtesting.
-     *
-     * Uses min-heap, earliest timestamp = highest priority
-     */
+    //Priority queue for events ordered by timestamp
     class EventQueue {
     public:
         EventQueue() = default;
@@ -39,7 +32,7 @@ namespace quantcore {
 
         EventPtr peek() const {
             if (queue_.empty()) {
-                throw std::runtime_error("Cannot peek at empty queue");
+                throw std::runtime_error("Queue is empty");
             }
             return queue_.top();
         }

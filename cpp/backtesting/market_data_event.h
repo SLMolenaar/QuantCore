@@ -5,15 +5,10 @@
 
 namespace quantcore {
 
-/**
- * Price and volume updates
- * 
- * Represents a bar (OHLCV) or tick update from market data feed.
- * This triggers strategy logic.
- */
+ // represents a bar or tick update
 class MarketDataEvent : public Event {
 public:
-    // Constructor for OHLCV bar data
+    // OHLCV bar data
     MarketDataEvent(
         const std::string& symbol,
         int64_t timestamp_ns,
@@ -33,7 +28,7 @@ public:
     {
     }
 
-    // Constructor for tick data, just price
+    // tick data, just price
     MarketDataEvent(
         const std::string& symbol,
         int64_t timestamp_ns,

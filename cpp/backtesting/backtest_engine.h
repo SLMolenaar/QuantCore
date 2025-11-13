@@ -17,23 +17,14 @@
 
 namespace quantcore {
 
-/**
- * Main backtesting loop
- * 
- * Load market data (MarketDataEvents)
- * Strategy sees data, generates SignalEvents
- * Portfolio converts signals (OrderEvents)
- * Execution fills orders )FillEvents)
- * Update positions and PnL
- * Repeat until there's no mor edata
- */
+// Main backtesting loop
 class BacktestEngine {
 public:
     BacktestEngine(double initial_capital = 100000.0)
-        : initial_capital_(initial_capital)
-        , current_capital_(initial_capital)
-        , next_order_id_(1)
-        , position_sizer_(std::make_shared<FixedPercentage>(0.1))
+        : init_cap_(initial_capital)
+        , curr_cap_(initial_capital)
+        , next_orderid_(1)
+        , sizer_(std::make_shared<FixedPercentage>(0.1))
         , mm_levels_(5)
         , mm_spread_(0.0001)
         , mm_depth_(100000)
@@ -43,35 +34,24 @@ public:
         }
     }
 
-    /**
-     * Add market data to backtest
-     */
     void add_data(const std::string& symbol, const BarSeries& bars) {
-        if (symbol.empty()) {
-            throw std::invalid_argument("Symbol cannot be empty");
-        }
         if (bars.empty()) {
             throw std::invalid_argument("Cannot add empty bar series");
         }
-        market_data_[symbol] = bars;
+        data_[symbol] = bars;
     }
 
-    void set_strategy(std::shared_ptr<Strategy> strategy) {
-        if (!strategy) {
-            throw std::invalid_argument("Strategy cannot be null");
-        }
-        strategy_ = strategy;
+    void set_strategy(std::shared_ptr<Strategy> strat) {
+        if (!strat) throw std::invalid_argument("Strategy cannot be null");
+        strat_ = strat;
     }
 
     void set_position_sizer(PositionSizerPtr sizer) {
-        if (!sizer) {
-            throw std::invalid_argument("Position sizer cannot be null");
-        }
-        position_sizer_ = sizer;
+        sizer_ = sizer;
     }
 
     PositionSizerPtr get_position_sizer() const {
-        return position_sizer_;
+        return sizer_;
     }
 
     void configure_market_maker(int levels, double spread, Quantity depth) {
@@ -82,72 +62,65 @@ public:
 
     //Run backtest, returns final portfolio value
     double run() {
-        if (!strategy_) {
-            throw std::runtime_error("No strategy set");
-        }
-        if (market_data_.empty()) {
-            throw std::runtime_error("No market data loaded");
-        }
-        
-        // Reset state
-        event_queue_.clear();
-        execution_engines_.clear();
-        market_makers_.clear();
-        last_prices_.clear();
-        current_capital_ = initial_capital_;
-        next_order_id_ = 1;
-        strategy_->reset();
+        if (!strat_) throw std::runtime_error("No strategy set");
+        if (data_.empty()) throw std::runtime_error("No market data loaded");
 
-        // Clear equity tracking
-        equity_curve_.clear();
+        // reset
+        eq_.clear();
+        engines_.clear();
+        mms_.clear();
+        last_px_.clear();
+        curr_cap_ = init_cap_;
+        next_orderid_ = 1;
+        strat_->reset();
+
+        equity_.clear();
         timestamps_.clear();
 
-        // Initialize execution engines for each symbol
-        for (const auto& [symbol, bars] : market_data_) {
-            execution_engines_[symbol] = std::make_shared<ExecutionEngine>(symbol);
-            market_makers_[symbol] = std::make_shared<MarketMaker>(
+        // setup
+        for (const auto& [symbol, bars] : data_) {
+            engines_[symbol] = std::make_shared<ExecutionEngine>(symbol);
+            mms_[symbol] = std::make_shared<MarketMaker>(
                 mm_spread_, mm_levels_, mm_depth_
             );
         }
 
-        load_market_data();
+        load_data();
 
-        // Record initial equity
-        equity_curve_.push_back(initial_capital_);
+        equity_.push_back(init_cap_);
         timestamps_.push_back(0);
 
-        // Main event loop
-        while (!event_queue_.empty()) {
-            auto event = event_queue_.pop();
+        // main loop
+        while (!eq_.empty()) {
+            auto event = eq_.pop();
 
             switch (event->get_type()) {
                 case EventType::MARKET_DATA:
-                    handle_market_data(event);
+                    handle_md(event);
                     break;
                 case EventType::SIGNAL:
-                    handle_signal(event);
+                    handle_sig(event);
                     break;
                 case EventType::ORDER:
-                    handle_order(event);
+                    handle_ord(event);
                     break;
                 case EventType::FILL:
                     handle_fill(event);
                     break;
             }
 
-            // After processing event, record equity if it was a market data event
             if (event->get_type() == EventType::MARKET_DATA) {
-                equity_curve_.push_back(calculate_portfolio_value());
+                equity_.push_back(calc_port_val());
                 timestamps_.push_back(event->get_timestamp());
             }
         }
 
-        return calculate_portfolio_value();
+        return calc_port_val();
     }
 
     double get_total_pnl() const {
         double total = 0.0;
-        for (const auto& [symbol, engine] : execution_engines_) {
+        for (const auto& [symbol, engine] : engines_) {
             total += engine->get_total_pnl();
         }
         return total;
@@ -155,186 +128,169 @@ public:
 
     double get_total_fees() const {
         double total = 0.0;
-        for (const auto& [symbol, engine] : execution_engines_) {
+        for (const auto& [symbol, engine] : engines_) {
             total += engine->get_total_fees();
         }
         return total;
     }
 
-    /**
-     * Get execution engine for a symbol (for inspection)
-     */
     std::shared_ptr<ExecutionEngine> get_execution_engine(const std::string& symbol) const {
-        auto it = execution_engines_.find(symbol);
-        return it != execution_engines_.end() ? it->second : nullptr;
+        auto it = engines_.find(symbol);
+        return it != engines_.end() ? it->second : nullptr;
     }
 
-    /**
-     * Get equity curve (portfolio value over time)
-    */
-    std::vector<double> get_equity_curve() const { return equity_curve_; }
-    /**
-    * Get timestamps corresponding to equity curve
-    */
+    std::vector<double> get_equity_curve() const { return equity_; }
     std::vector<int64_t> get_timestamps() const { return timestamps_; }
 
 private:
-    EventQueue event_queue_;
-    std::shared_ptr<Strategy> strategy_;
-    std::map<std::string, BarSeries> market_data_;
-    std::map<std::string, std::shared_ptr<ExecutionEngine>> execution_engines_;
-    std::map<std::string, std::shared_ptr<MarketMaker>> market_makers_;
-    std::map<std::string, double> last_prices_;
+    EventQueue eq_;
+    std::shared_ptr<Strategy> strat_;
+    std::map<std::string, BarSeries> data_;
+    std::map<std::string, std::shared_ptr<ExecutionEngine>> engines_;
+    std::map<std::string, std::shared_ptr<MarketMaker>> mms_;
+    std::map<std::string, double> last_px_;
 
-    double initial_capital_;
-    double current_capital_;
-    uint64_t next_order_id_;
+    double init_cap_;
+    double curr_cap_;
+    uint64_t next_orderid_;
 
-    PositionSizerPtr position_sizer_;
+    PositionSizerPtr sizer_;
 
-    // Equity tracking
-    std::vector<double> equity_curve_;
+    std::vector<double> equity_;
     std::vector<int64_t> timestamps_;
 
     int mm_levels_;
     double mm_spread_;
     Quantity mm_depth_;
 
-    void load_market_data() {
-        for (const auto& [symbol, bars] : market_data_) {
+    void load_data() {
+        for (const auto& [symbol, bars] : data_) {
             for (const auto& bar : bars) {
                 auto event = std::make_shared<MarketDataEvent>(
                     symbol, bar.timestamp_ns, bar.open, bar.high,
                     bar.low, bar.close, bar.volume
                 );
-                event_queue_.push(event);
+                eq_.push(event);
             }
         }
     }
 
-    void handle_market_data(EventPtr event) {
-        auto md_event = std::static_pointer_cast<MarketDataEvent>(event);
-        std::string symbol = md_event->get_symbol();
-        last_prices_[symbol] = md_event->get_close();
+    void handle_md(EventPtr event) {
+        auto md = std::static_pointer_cast<MarketDataEvent>(event);
+        std::string symbol = md->get_symbol();
+        last_px_[symbol] = md->get_close();
 
-        auto ee_it = execution_engines_.find(symbol);
-        if (ee_it != execution_engines_.end()) {
-            auto mm_it = market_makers_.find(symbol);
-            if (mm_it != market_makers_.end()) {
-                mm_it->second->update_quotes(*ee_it->second, *md_event);
+        // update mm quotes
+        auto ee_it = engines_.find(symbol);
+        if (ee_it != engines_.end()) {
+            auto mm_it = mms_.find(symbol);
+            if (mm_it != mms_.end()) {
+                mm_it->second->update_quotes(*ee_it->second, *md);
             }
         }
 
-        strategy_->on_data(*md_event);
+        strat_->on_data(*md);
 
-        // Check if strategy generated any signals
-        auto signals = strategy_->get_signals();
-        for (const auto& signal : signals) {
-            event_queue_.push(signal);
+        auto signals = strat_->get_signals();
+        for (const auto& sig : signals) {
+            eq_.push(sig);
         }
     }
 
-    // convert signal event to order
-    void handle_signal(EventPtr event) {
-        auto signal = std::static_pointer_cast<SignalEvent>(event);
-        auto price_it = last_prices_.find(signal->get_symbol());
-        if (price_it == last_prices_.end()) return;
+    void handle_sig(EventPtr event) {
+        auto sig = std::static_pointer_cast<SignalEvent>(event);
+        auto px_it = last_px_.find(sig->get_symbol());
+        if (px_it == last_px_.end()) return;
 
-        double current_price = price_it->second;
-        if (current_price == 0.0) return;
+        double curr_px = px_it->second;
+        if (curr_px == 0.0) return;
 
-        // Get current position from execution engine
-        auto ee_it = execution_engines_.find(signal->get_symbol());
-        if (ee_it == execution_engines_.end()) return;
+        auto ee_it = engines_.find(sig->get_symbol());
+        if (ee_it == engines_.end()) return;
 
-        double current_position = ee_it->second->get_position();
+        double curr_pos = ee_it->second->get_position();
 
-        // Calculate target position size using position sizer
+        // size the position
         PositionSizingContext ctx(
-            signal->get_strength(), current_capital_, current_price,
-            current_position, 0.02, 0.05
+            sig->get_strength(), curr_cap_, curr_px,
+            curr_pos, 0.02, 0.05  // TODO: actual portfolio vol
         );
-        double target_shares = position_sizer_->calculate_size(ctx);
+        double target = sizer_->calculate_size(ctx);
 
-        double spread_pct = mm_spread_;
-        auto mm_it = market_makers_.find(signal->get_symbol());
-        if (mm_it != market_makers_.end()) {
-            spread_pct = mm_it->second->get_spread();
+        double spread = mm_spread_;
+        auto mm_it = mms_.find(sig->get_symbol());
+        if (mm_it != mms_.end()) {
+            spread = mm_it->second->get_spread();
         }
 
-        double order_price;
-        if (signal->get_signal_type() == SignalType::BUY) {
-            order_price = current_price * (1.0 + spread_pct / 2.0);
-        } else if (signal->get_signal_type() == SignalType::SELL) {
-            order_price = current_price * (1.0 - spread_pct / 2.0);
+        double ord_px;
+        if (sig->get_signal_type() == SignalType::BUY) {
+            ord_px = curr_px * (1.0 + spread / 2.0);
+        } else if (sig->get_signal_type() == SignalType::SELL) {
+            ord_px = curr_px * (1.0 - spread / 2.0);
         } else {
             return;
         }
 
-        double position_delta = target_shares - current_position;
-        if (std::abs(position_delta) < 1.0) return;
+        double delta = target - curr_pos;
+        if (std::abs(delta) < 1.0) return;
 
-        Side order_side = (position_delta > 0) ? Side::Buy : Side::Sell;
-        if (position_delta < 0) position_delta = -position_delta;
+        Side side = (delta > 0) ? Side::Buy : Side::Sell;
 
-        auto order_event = std::make_shared<OrderEvent>(
-            signal->get_symbol(), signal->get_timestamp(),
-            order_side, OrderType::GoodTillCancel,
-            std::abs(position_delta), order_price
+        auto ord = std::make_shared<OrderEvent>(
+            sig->get_symbol(), sig->get_timestamp(),
+            side, OrderType::GoodTillCancel,
+            std::abs(delta), ord_px
         );
-        order_event->set_order_id(next_order_id_++);
-        event_queue_.push(order_event);
+        ord->set_order_id(next_orderid_++);
+        eq_.push(ord);
     }
 
-    // execute through orderbook
-    void handle_order(EventPtr event) {
-        auto order_event = std::static_pointer_cast<OrderEvent>(event);
-        auto it = execution_engines_.find(order_event->get_symbol());
-        if (it == execution_engines_.end()) {
-            throw std::runtime_error("No execution engine for symbol: " + order_event->get_symbol());
+    void handle_ord(EventPtr event) {
+        auto ord = std::static_pointer_cast<OrderEvent>(event);
+        auto it = engines_.find(ord->get_symbol());
+        if (it == engines_.end()) {
+            throw std::runtime_error("No execution engine for symbol: " + ord->get_symbol());
         }
 
         auto engine = it->second;
-        if (order_event->is_cancel()) {
-            engine->cancel_order(order_event->get_order_id());
+        if (ord->is_cancel()) {
+            engine->cancel_order(ord->get_order_id());
             return;
         }
 
-        Price price_cents = static_cast<Price>(order_event->get_price() * 100.0);
-        Quantity quantity = static_cast<Quantity>(order_event->get_quantity());
+        Price px_cents = static_cast<Price>(ord->get_price() * 100.0);
+        Quantity qty = static_cast<Quantity>(ord->get_quantity());
 
         auto order = std::make_shared<Order>(
-            order_event->get_order_type(), order_event->get_order_id(),
-            order_event->get_side(), price_cents, quantity
+            ord->get_order_type(), ord->get_order_id(),
+            ord->get_side(), px_cents, qty
         );
 
         auto trades = engine->execute_order(order);
 
-        // Generate fill events for each trade
         for (const auto& trade : trades) {
-            auto fill_event = std::make_shared<FillEvent>(
-                order_event->get_symbol(), order_event->get_timestamp(),
-                order_event->get_order_id(), order_event->get_side(),
+            auto fill = std::make_shared<FillEvent>(
+                ord->get_symbol(), ord->get_timestamp(),
+                ord->get_order_id(), ord->get_side(),
                 trade.GetBidTrade().quantity_, trade.GetBidTrade().price_ / 100.0, 0.0
             );
-            event_queue_.push(fill_event);
+            eq_.push(fill);
         }
     }
 
-    // update positions
     void handle_fill(EventPtr event) {
         auto fill = std::static_pointer_cast<FillEvent>(event);
-        auto ee_it = execution_engines_.find(fill->get_symbol());
-        if (ee_it != execution_engines_.end()) {
-            strategy_->set_position(fill->get_symbol(), ee_it->second->get_position());
+        auto ee_it = engines_.find(fill->get_symbol());
+        if (ee_it != engines_.end()) {
+            strat_->set_position(fill->get_symbol(), ee_it->second->get_position());
         }
-        
-        // Notify strategy
-        strategy_->on_fill(*fill);
+
+        strat_->on_fill(*fill);
     }
 
-    double calculate_portfolio_value() const {
-        return current_capital_ + get_total_pnl();
+    double calc_port_val() const {
+        return curr_cap_ + get_total_pnl();
     }
 };
 

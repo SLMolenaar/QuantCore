@@ -6,14 +6,10 @@
 
 namespace quantcore {
 
-    /**
-     * Single OHLCV bar
-     *
-     * Represents price action over a time period (1min, 5min, 1day, etc.)
-     */
+    // single OHLCV bar
     struct BarData {
         std::string symbol;
-        int64_t timestamp_ns;   // Bar close time
+        int64_t timestamp_ns;// close time
         double open;
         double high;
         double low;

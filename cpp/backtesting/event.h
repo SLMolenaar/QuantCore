@@ -8,19 +8,16 @@
 namespace quantcore {
 
 /**
- * All possible event types in the system
+ * All event types in the system
  */
 enum class EventType {
     MARKET_DATA,  // Price/volume updates
-    SIGNAL,       // Strategy signals (buy/sell)
+    SIGNAL,       // Strategy signals
     ORDER,        // Order commands (new/cancel/modify)
     FILL          // Execution confirmations
 };
 
-/**
- * Base class for all events
- * processed in chronological order to prevent look-ahead bias
- */
+// base class for events
 class Event {
 public:
     Event(EventType type, int64_t timestamp_ns)
@@ -31,13 +28,12 @@ public:
 
     virtual ~Event() = default;
 
-    // Get event type
     EventType get_type() const { return type_; }
 
     // nanoseconds since epoch
     int64_t get_timestamp() const { return timestamp_ns_; }
 
-    // Convert to string for debugging
+    // to string for debugging
     virtual std::string to_string() const {
         std::string type_str;
         switch (type_) {
@@ -54,13 +50,9 @@ protected:
     int64_t timestamp_ns_;
 };
 
-// Shared pointer to event
 using EventPtr = std::shared_ptr<Event>;
 
-/**
- * Comparison operators for event ordering
- * Earlier timestamps have higher priority
- */
+// Comparison operators for event ordering
 inline bool operator<(const Event& lhs, const Event& rhs) {
     return lhs.get_timestamp() > rhs.get_timestamp(); // Reverse for min-heap
 }

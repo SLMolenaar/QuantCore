@@ -1,12 +1,5 @@
 """
 QuantCore Example Usage
-
-Demonstrates the full workflow:
-1. Load market data
-2. Run backtests with different strategies
-3. Calculate performance metrics
-4. Generate visualizations
-5. Compare strategies
 """
 
 import sys

@@ -10,16 +10,7 @@
 
 namespace quantcore {
 
-/**
- * Provides synthetic liquidity for backtesting
- *
- * In real markets, there are market makers providing bid/ask quotes.
- * This simulates that by placing limit orders at bid/ask around the
- * current market price with a configurable spread.
- *
- * Without this, strategies would have no liquidity to trade against.
- */
-
+// synthetic liquidity for backtesting, makes sure strategies have liquidity to trade against
 class MarketMaker {
 public:
     MarketMaker(
@@ -43,9 +34,9 @@ public:
         double volume = event.get_volume();
         int64_t timestamp = event.get_timestamp();
 
-        price_history_.push_back(mid_price);
-        if (price_history_.size() > 20) {
-            price_history_.pop_front();
+        price_hist_.push_back(mid_price);
+        if (price_hist_.size() > 20) {
+            price_hist_.pop_front();
         }
 
         double volatility = calc_volatility();
@@ -78,21 +69,21 @@ private:
     Quantity base_depth_;
     uint64_t next_order_id_;
 
-    std::deque<double> price_history_;
+    std::deque<double> price_hist_;
     std::vector<OrderId> active_orders_;
     mutable std::mt19937 rng_;
 
     void cancel_orders(ExecutionEngine& engine) {
-        auto& orderbook = engine.get_orderbook();
+        auto& ob = engine.get_orderbook();
         for (OrderId id : active_orders_) {
-            orderbook.CancelOrder(id);
+            ob.CancelOrder(id);
         }
         active_orders_.clear();
     }
 
     void place_orders(ExecutionEngine& engine, double mid_price,
                      double volume, Side side) {
-        auto& orderbook = engine.get_orderbook();
+        auto& ob = engine.get_orderbook();
 
         for (int level = 0; level < num_levels_; ++level) {
             double offset = (level + 0.5) * current_spread_pct_;
@@ -112,7 +103,7 @@ private:
                 quantity
             );
 
-            orderbook.AddOrder(order);
+            ob.AddOrder(order);
             active_orders_.push_back(order->GetOrderId());
         }
     }
@@ -128,11 +119,11 @@ private:
     }
 
     double calc_volatility() const {
-        if (price_history_.size() < 2) return 0.02;
+        if (price_hist_.size() < 2) return 0.02;
 
         std::vector<double> returns;
-        for (size_t i = 1; i < price_history_.size(); ++i) {
-            returns.push_back((price_history_[i] - price_history_[i-1]) / price_history_[i-1]);
+        for (size_t i = 1; i < price_hist_.size(); ++i) {
+            returns.push_back((price_hist_[i] - price_hist_[i-1]) / price_hist_[i-1]);
         }
 
         double mean = 0.0;
