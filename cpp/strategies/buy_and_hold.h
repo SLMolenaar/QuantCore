@@ -5,7 +5,7 @@
 
 namespace quantcore {
 
-    // Just for testing the backtesting engine
+    // Just for testing backtesting engine
     class BuyAndHold : public Strategy {
     public:
         BuyAndHold() : Strategy("BuyAndHold"), bought_(false) {}

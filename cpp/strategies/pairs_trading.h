@@ -8,18 +8,8 @@
 
 namespace quantcore {
 
-/**
- * Pairs trading strategy
- *
- * Classic statistical arbitrage strategy that trades the spread between
- * two correlated assets. When spread diverges from historical mean,
- * go long underperformer and short outperformer.
- *
- * This demonstrates multi-asset strategy capabilities:
- * - Tracks multiple symbols simultaneously
- * - Makes portfolio-level decisions
- * - Uses portfolio context for capital allocation
- */
+//Pairs trading strategy
+// trades the espread between two correlated assets.
 class PairsTrading : public Strategy {
 public:
     PairsTrading(
