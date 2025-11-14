@@ -19,7 +19,7 @@ public:
     Quantity GetQuantity() const { return quantity_; }
 
     OrderPointer ToOrderPointer(OrderType type) const {
-        // Converts modification to to a new order
+        // Converts modification to new order
         return std::make_shared<Order>(type, GetOrderId(), GetSide(), GetPrice(), GetQuantity());
     }
 
