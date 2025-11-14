@@ -76,7 +76,7 @@ def build_equity_curve(initial_capital, final_value, num_periods):
 
 
 def run_buy_and_hold():
-    """Example 1: Buy and Hold Strategy"""
+    #Example 1: Buy and Hold Strategy
     print_section("Example 1: Buy and Hold Strategy")
 
     data_file = DATA_DIR / "test_buy_and_hold.csv"
