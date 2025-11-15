@@ -1,19 +1,14 @@
-"""
-QuantCore
-A C++-backed event-driven backtesting framework for algorithmic trading strategies.
-"""
-
 import sys
 from pathlib import Path
 from typing import List, Dict, Optional
 import warnings
 
-# Add current directory to path for C++ module import
+# add current directory to path for C++ module import
 _current_dir = Path(__file__).parent
 if str(_current_dir) not in sys.path:
     sys.path.insert(0, str(_current_dir))
 
-# Try to import the C++ extension
+# import the C++ extension
 try:
     from . import _core
 except ImportError:
@@ -77,49 +72,33 @@ RiskManager = _core.RiskManager
 hello = _core.hello
 version = _core.version
 
+
 # ============================================================================
 # PYTHON HELPERS
 # ============================================================================
 
 def load_csv_data(filepath: str, symbol: str = "", has_header: bool = True) -> List[BarData]:
     """
-    Load OHLCV data from CSV file.
-
-    Args:
-        filepath: Path to CSV file
-        symbol: Symbol name (if not in CSV)
-        has_header: Whether CSV has a header row
-
-    Returns:
-        List of BarData objects
+    Load OHLCV data from CSV file
 
     CSV Format:
-        - 6 columns: timestamp,open,high,low,close,volume
-        - 7 columns: symbol,timestamp,open,high,low,close,volume
+        6 columns: timestamp,open,high,low,close,volume
+        7 columns: symbol,timestamp,open,high,low,close,volume
 
-    Timestamps can be in seconds, milliseconds, or nanoseconds.
+    Timestamps can be seconds, milliseconds, or nanoseconds
     """
     return CSVDataLoader.load(filepath, symbol, has_header)
 
 
 def create_backtest(
-    initial_capital: float = 100000.0,
-    data: Optional[Dict[str, List[BarData]]] = None,
-    strategy: Optional[Strategy] = None
+        initial_capital: float = 100000.0,
+        data: Optional[Dict[str, List[BarData]]] = None,
+        strategy: Optional[Strategy] = None
 ) -> BacktestEngine:
     """
-    Create a backtest engine with data and strategy.
-
-    Args:
-        initial_capital: Starting capital in dollars
-        data: Dictionary mapping symbols to bar data
-        strategy: Trading strategy instance
-
-    Returns:
-        Configured BacktestEngine
+    Create a backtest engine with data and strategy
 
     Example:
-        >>> from quantcore import *
         >>> bars = load_csv_data("data/AAPL.csv", "AAPL")
         >>> strategy = SMACrossover(fast_period=50, slow_period=200)
         >>> engine = create_backtest(100000, {"AAPL": bars}, strategy)
@@ -138,34 +117,16 @@ def create_backtest(
 
 
 def run_backtest(
-    strategy: Strategy,
-    data: Dict[str, List[BarData]],
-    initial_capital: float = 100000.0
+        strategy: Strategy,
+        data: Dict[str, List[BarData]],
+        initial_capital: float = 100000.0
 ) -> Dict[str, float]:
     """
-    Run a complete backtest and return results.
+    Run a complete backtest and return results
 
-    Args:
-        strategy: Trading strategy
-        data: Dictionary mapping symbols to bar data
-        initial_capital: Starting capital
-
-    Returns:
-        Dictionary with backtest results:
-        - initial_capital: Starting capital
-        - final_value: Ending portfolio value
-        - total_pnl: Total profit/loss
-        - total_fees: Total fees paid
-        - return_pct: Percentage return
-        - strategy: Strategy name
-
-    Example:
-        >>> results = run_backtest(
-        ...     SMACrossover(50, 200),
-        ...     {"AAPL": load_csv_data("AAPL.csv", "AAPL")},
-        ...     100000
-        ... )
-        >>> print(f"Return: {results['return_pct']:.2f}%")
+    Returns dict with:
+        - initial_capital, final_value, total_pnl, total_fees
+        - return_pct, equity_curve, timestamps
     """
     engine = create_backtest(initial_capital, data, strategy)
     final_value = engine.run()
@@ -187,7 +148,7 @@ def run_backtest(
 
 
 class BacktestResults:
-    """Container for backtest results with convenient access."""
+    """Container for backtest results"""
 
     def __init__(self, engine: BacktestEngine, initial_capital: float, strategy: Strategy):
         self.engine = engine
@@ -199,7 +160,7 @@ class BacktestResults:
         self.execution_engines = {}
 
     def compute(self):
-        """Compute results after backtest run."""
+        """Compute results after backtest run"""
         self.final_value = self.engine.run()
         self.total_pnl = self.engine.get_total_pnl()
         self.total_fees = self.engine.get_total_fees()
@@ -207,20 +168,20 @@ class BacktestResults:
 
     @property
     def return_pct(self) -> float:
-        """Return percentage."""
+        """Return percentage"""
         if self.final_value is None:
             return 0.0
         return ((self.final_value / self.initial_capital) - 1.0) * 100.0
 
     @property
     def net_pnl(self) -> float:
-        """Net PnL after fees."""
+        """Net PnL after fees"""
         if self.total_pnl is None or self.total_fees is None:
             return 0.0
         return self.total_pnl - self.total_fees
 
     def get_position(self, symbol: str) -> float:
-        """Get final position for a symbol."""
+        """Get final position for a symbol"""
         ee = self.engine.get_execution_engine(symbol)
         return ee.get_position() if ee else 0.0
 
@@ -238,7 +199,7 @@ class BacktestResults:
         )
 
     def summary(self) -> str:
-        """Get formatted summary of results."""
+        """Get formatted summary"""
         if self.final_value is None:
             return "Backtest not yet computed. Call .compute() first."
 

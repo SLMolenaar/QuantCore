@@ -1,11 +1,10 @@
 """
 Performance analytics for backtesting results
 
-Provides standard quantitative finance metrics:
+Standard metrics for evaluating strategy performance:
 - Returns (total, annualized, rolling)
-- Risk metrics (Sharpe, Sortino, volatility, max drawdown)
-- Trading metrics (win rate, profit factor, average trade)
-- Drawdown analysis
+- Risk metrics (Sharpe, Sortino, volatility, drawdown)
+- Trade analysis (win rate, profit factor, avg trade)
 """
 
 import numpy as np
@@ -16,7 +15,7 @@ from dataclasses import dataclass
 
 @dataclass
 class PerformanceMetrics:
-    """Container for backtest performance metrics"""
+    """Container for backtest metrics"""
 
     # Returns
     total_return: float
@@ -42,7 +41,7 @@ class PerformanceMetrics:
     calmar_ratio: float
 
     def __str__(self) -> str:
-        """Format metrics for display"""
+        """Format for printing"""
         lines = [
             "=" * 60,
             "  Performance Metrics",
@@ -77,12 +76,6 @@ class PerformanceMetrics:
 def calculate_returns(equity_curve: np.ndarray) -> np.ndarray:
     """
     Calculate returns from equity curve
-
-    Args:
-        equity_curve: Array of portfolio values over time
-
-    Returns:
-        Array of percentage returns
     """
     if len(equity_curve) < 2:
         return np.array([])
@@ -93,13 +86,7 @@ def calculate_returns(equity_curve: np.ndarray) -> np.ndarray:
 
 def calculate_total_return(equity_curve: np.ndarray) -> float:
     """
-    Calculate total return percentage
-
-    Args:
-        equity_curve: Array of portfolio values
-
-    Returns:
-        Total return as percentage
+    Total return as percentage
     """
     if len(equity_curve) < 2:
         return 0.0
@@ -109,14 +96,7 @@ def calculate_total_return(equity_curve: np.ndarray) -> float:
 
 def calculate_annualized_return(equity_curve: np.ndarray, periods_per_year: int = 252) -> float:
     """
-    Calculate annualized return
-
-    Args:
-        equity_curve: Array of portfolio values
-        periods_per_year: Trading periods per year (252 for daily, 52 for weekly)
-
-    Returns:
-        Annualized return as percentage
+    Annualized return
     """
     if len(equity_curve) < 2:
         return 0.0
@@ -134,14 +114,7 @@ def calculate_annualized_return(equity_curve: np.ndarray, periods_per_year: int 
 
 def calculate_volatility(returns: np.ndarray, periods_per_year: int = 252) -> float:
     """
-    Calculate annualized volatility
-
-    Args:
-        returns: Array of returns
-        periods_per_year: Trading periods per year
-
-    Returns:
-        Annualized volatility as percentage
+    Annualized volatility as percentage
     """
     if len(returns) == 0:
         return 0.0
@@ -155,20 +128,12 @@ def calculate_sharpe_ratio(
         periods_per_year: int = 252
 ) -> float:
     """
-    Calculate Sharpe ratio
-
-    Args:
-        returns: Array of returns
-        risk_free_rate: Annual risk-free rate (as decimal, e.g., 0.02 for 2%)
-        periods_per_year: Trading periods per year
-
-    Returns:
-        Sharpe ratio
+    Sharpe ratio
     """
     if len(returns) == 0:
         return 0.0
 
-    # Convert annual risk-free rate to per-period
+    # convert annual risk-free rate to per-period
     rf_per_period = risk_free_rate / periods_per_year
 
     excess_returns = returns - rf_per_period
@@ -186,15 +151,7 @@ def calculate_sortino_ratio(
         periods_per_year: int = 252
 ) -> float:
     """
-    Calculate Sortino ratio (uses downside deviation instead of total volatility)
-
-    Args:
-        returns: Array of returns
-        risk_free_rate: Annual risk-free rate
-        periods_per_year: Trading periods per year
-
-    Returns:
-        Sortino ratio
+    Sortino ratio - uses downside deviation instead of total volatility
     """
     if len(returns) == 0:
         return 0.0
@@ -202,7 +159,7 @@ def calculate_sortino_ratio(
     rf_per_period = risk_free_rate / periods_per_year
     excess_returns = returns - rf_per_period
 
-    # Only consider negative returns for downside deviation
+    # only negative returns for downside deviation
     downside_returns = excess_returns[excess_returns < 0]
 
     if len(downside_returns) == 0:
@@ -219,37 +176,29 @@ def calculate_sortino_ratio(
 
 def calculate_max_drawdown(equity_curve: np.ndarray) -> Tuple[float, int]:
     """
-    Calculate maximum drawdown and its duration
+    Maximum drawdown and its duration
 
-    Args:
-        equity_curve: Array of portfolio values
-
-    Returns:
-        Tuple of (max_drawdown_pct, duration_in_periods)
+    Returns (max_drawdown_pct, duration_in_periods)
     """
     if len(equity_curve) < 2:
         return 0.0, 0
 
-    # Calculate running maximum
     running_max = np.maximum.accumulate(equity_curve)
-
-    # Calculate drawdown at each point
     drawdown = (equity_curve - running_max) / running_max
 
-    # Find maximum drawdown
-    max_dd = np.min(drawdown) * 100.0  # Convert to percentage
+    max_dd = np.min(drawdown) * 100.0
 
-    # Find duration of maximum drawdown
+    # find duration of maximum drawdown
     max_dd_idx = np.argmin(drawdown)
 
-    # Find when the peak before max drawdown occurred
+    # find peak before max drawdown
     peak_idx = 0
     for i in range(max_dd_idx, -1, -1):
         if equity_curve[i] == running_max[max_dd_idx]:
             peak_idx = i
             break
 
-    # Find when equity recovered (if it did)
+    # find when equity recovered (if it did)
     recovery_idx = len(equity_curve)
     peak_value = equity_curve[peak_idx]
     for i in range(max_dd_idx + 1, len(equity_curve)):
@@ -264,14 +213,7 @@ def calculate_max_drawdown(equity_curve: np.ndarray) -> Tuple[float, int]:
 
 def calculate_calmar_ratio(annualized_return: float, max_drawdown: float) -> float:
     """
-    Calculate Calmar ratio (annualized return / max drawdown)
-
-    Args:
-        annualized_return: Annualized return as percentage
-        max_drawdown: Maximum drawdown as percentage (negative)
-
-    Returns:
-        Calmar ratio
+    Calmar ratio = annualized return / max drawdown
     """
     if max_drawdown >= 0:
         return 0.0
@@ -282,12 +224,6 @@ def calculate_calmar_ratio(annualized_return: float, max_drawdown: float) -> flo
 def analyze_trades(trade_pnls: List[float]) -> Dict[str, float]:
     """
     Analyze individual trade performance
-
-    Args:
-        trade_pnls: List of PnL for each trade
-
-    Returns:
-        Dictionary with trading metrics
     """
     if not trade_pnls:
         return {
@@ -339,31 +275,21 @@ def calculate_all_metrics(
 ) -> PerformanceMetrics:
     """
     Calculate all performance metrics from equity curve
-
-    Args:
-        equity_curve: Array of portfolio values over time
-        trade_pnls: Optional list of individual trade PnLs
-        risk_free_rate: Annual risk-free rate (default 2%)
-        periods_per_year: Trading periods per year (default 252 for daily)
-
-    Returns:
-        PerformanceMetrics object with all calculated metrics
     """
-    # Calculate returns
     returns = calculate_returns(equity_curve)
 
-    # Return metrics
+    # return metrics
     total_return = calculate_total_return(equity_curve)
     annualized_return = calculate_annualized_return(equity_curve, periods_per_year)
 
-    # Risk metrics
+    # risk metrics
     volatility = calculate_volatility(returns, periods_per_year)
     sharpe = calculate_sharpe_ratio(returns, risk_free_rate, periods_per_year)
     sortino = calculate_sortino_ratio(returns, risk_free_rate, periods_per_year)
     max_dd, max_dd_duration = calculate_max_drawdown(equity_curve)
     calmar = calculate_calmar_ratio(annualized_return, max_dd)
 
-    # Trading metrics
+    # trading metrics
     if trade_pnls is None:
         trade_metrics = {
             'total_trades': 0,
@@ -396,15 +322,7 @@ def rolling_sharpe(
         periods_per_year: int = 252
 ) -> np.ndarray:
     """
-    Calculate rolling Sharpe ratio
-
-    Args:
-        returns: Array of returns
-        window: Rolling window size
-        periods_per_year: Trading periods per year
-
-    Returns:
-        Array of rolling Sharpe ratios
+    Rolling Sharpe ratio
     """
     if len(returns) < window:
         return np.array([])
@@ -425,15 +343,7 @@ def rolling_volatility(
         periods_per_year: int = 252
 ) -> np.ndarray:
     """
-    Calculate rolling volatility
-
-    Args:
-        returns: Array of returns
-        window: Rolling window size
-        periods_per_year: Trading periods per year
-
-    Returns:
-        Array of rolling volatilities
+    Rolling volatility
     """
     if len(returns) < window:
         return np.array([])
@@ -452,37 +362,30 @@ def monthly_returns(equity_curve: np.ndarray, timestamps: np.ndarray) -> pd.Data
     """
     Calculate monthly returns table
 
-    Args:
-        equity_curve: Array of portfolio values
-        timestamps: Array of timestamps (as datetime objects or nanoseconds)
-
-    Returns:
-        DataFrame with monthly returns by year
+    Returns DataFrame with monthly returns by year
     """
-    # Create DataFrame
     df = pd.DataFrame({
         'timestamp': timestamps,
         'equity': equity_curve
     })
 
-    # Convert timestamps to datetime if needed
+    # convert timestamps if needed
     if df['timestamp'].dtype == 'int64':
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ns')
 
-    # Set timestamp as index
     df.set_index('timestamp', inplace=True)
 
-    # Calculate returns
+    # calculate returns
     df['returns'] = df['equity'].pct_change()
 
-    # Resample to monthly and calculate returns
+    # resample to monthly
     monthly = df['returns'].resample('M').apply(lambda x: (1 + x).prod() - 1)
 
-    # Create pivot table with years as rows and months as columns
+    # pivot to year x month table
     monthly_df = pd.DataFrame({
         'year': monthly.index.year,
         'month': monthly.index.month,
-        'return': monthly.values * 100  # Convert to percentage
+        'return': monthly.values * 100
     })
 
     pivot = monthly_df.pivot(index='year', columns='month', values='return')
@@ -495,12 +398,6 @@ def monthly_returns(equity_curve: np.ndarray, timestamps: np.ndarray) -> pd.Data
 def underwater_plot_data(equity_curve: np.ndarray) -> np.ndarray:
     """
     Calculate drawdown data for underwater plot
-
-    Args:
-        equity_curve: Array of portfolio values
-
-    Returns:
-        Array of drawdown percentages at each point
     """
     running_max = np.maximum.accumulate(equity_curve)
     drawdown = (equity_curve - running_max) / running_max * 100.0

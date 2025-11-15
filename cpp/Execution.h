@@ -29,7 +29,7 @@ struct ExecutionConfig {
     double slippage_pct = defaults::SLIPPAGE_PCT;
 };
 
-// Execution engine wrapping orderbook with backtesting features
+// wraps orderbook with backtesting features
 class ExecutionEngine {
 public:
     ExecutionEngine(const std::string& symbol = "DEFAULT",
@@ -138,7 +138,7 @@ public:
         return asks.empty() ? 0 : asks[0].price_;
     }
 
-    // abg of best bid & ask
+    // avg of best bid & ask
     std::optional<double> get_mid_price() const {
         Price bid = get_best_bid();
         Price ask = get_best_ask();

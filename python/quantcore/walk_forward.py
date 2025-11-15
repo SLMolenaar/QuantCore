@@ -1,14 +1,11 @@
 """
 Walk-forward analysis and parameter optimization
 
-This module provides tools for robust strategy validation:
-- Walk-forward analysis to prevent overfitting
-- Parameter grid search optimization
+Tools for validating strategies and finding optimal parameters:
+- Walk-forward analysis to avoid overfitting
+- Grid search optimization
 - Rolling window backtests
-- Performance stability analysis
-
-Walk-forward analysis is critical for production strategies as it simulates
-the real-world process of periodically reoptimizing parameters on new data.
+- Monte Carlo validation
 """
 
 import numpy as np
@@ -21,7 +18,7 @@ import itertools
 
 @dataclass
 class OptimizationResult:
-    """Result from a single parameter combination"""
+    """Single parameter combination result"""
     params: Dict[str, Any]
     sharpe_ratio: float
     total_return: float
@@ -35,7 +32,7 @@ class OptimizationResult:
 
 @dataclass
 class WalkForwardResult:
-    """Result from walk-forward analysis"""
+    """Results from walk-forward analysis"""
     in_sample_results: List[OptimizationResult]
     out_of_sample_results: List[Dict[str, Any]]
     best_params_per_window: List[Dict[str, Any]]
@@ -43,7 +40,7 @@ class WalkForwardResult:
     overall_metrics: Dict[str, float]
 
     def summary(self) -> str:
-        """Generate summary report"""
+        """Print summary of results"""
         lines = [
             "=" * 70,
             "  Walk-Forward Analysis Results",
@@ -70,22 +67,20 @@ class WalkForwardResult:
 
 
 class ParameterGrid:
-    """Generate parameter combinations for grid search"""
+    """Generate all parameter combinations for grid search"""
 
     def __init__(self, param_grid: Dict[str, List[Any]]):
         """
-        Initialize parameter grid
-
         Args:
-            param_grid: Dictionary mapping parameter names to lists of values
-                       e.g., {'fast_period': [10, 20, 30], 'slow_period': [50, 100, 200]}
+            param_grid: Dict mapping param names to value lists
+                       e.g., {'fast_period': [10, 20, 30], 'slow_period': [50, 100]}
         """
         self.param_grid = param_grid
         self.param_names = list(param_grid.keys())
         self.param_values = [param_grid[name] for name in self.param_names]
 
     def __iter__(self):
-        """Iterate over all parameter combinations"""
+        """Iterate through all combinations"""
         for values in itertools.product(*self.param_values):
             yield dict(zip(self.param_names, values))
 
@@ -96,9 +91,9 @@ class ParameterGrid:
 
 class GridSearchOptimizer:
     """
-    Grid search parameter optimization
+    Grid search over parameter space
 
-    Tests all combinations of parameters and ranks by chosen metric.
+    Tests all param combinations and ranks by chosen metric.
     """
 
     def __init__(
@@ -109,13 +104,11 @@ class GridSearchOptimizer:
         n_jobs: int = 1
     ):
         """
-        Initialize grid search optimizer
-
         Args:
-            strategy_factory: Function that creates strategy given params
-            param_grid: Dictionary of parameter ranges
+            strategy_factory: Function that creates strategy from params
+            param_grid: Parameter ranges to test
             metric: Metric to optimize ('sharpe_ratio', 'total_return', 'calmar_ratio')
-            n_jobs: Number of parallel jobs (1 = sequential)
+            n_jobs: Number of parallel jobs
         """
         self.strategy_factory = strategy_factory
         self.param_grid = ParameterGrid(param_grid)
@@ -130,15 +123,9 @@ class GridSearchOptimizer:
         verbose: bool = True
     ) -> List[OptimizationResult]:
         """
-        Run grid search optimization
+        Run grid search
 
-        Args:
-            data: Market data for backtesting
-            initial_capital: Starting capital
-            verbose: Print progress
-
-        Returns:
-            List of results sorted by metric
+        Returns sorted list of results
         """
         from . import run_backtest
         from .analytics import calculate_all_metrics, calculate_returns
@@ -147,6 +134,7 @@ class GridSearchOptimizer:
         self.results = []
 
         for i, params in enumerate(self.param_grid):
+            # skip invalid parameter combos
             if 'fast_period' in params and 'slow_period' in params:
                 if params['fast_period'] >= params['slow_period']:
                     continue
@@ -184,16 +172,17 @@ class GridSearchOptimizer:
             except Exception:
                 continue
 
+        # sort by chosen metric
         self.results.sort(key=lambda x: getattr(x, self.metric), reverse=True)
 
         return self.results
 
     def get_top_n(self, n: int = 10) -> List[OptimizationResult]:
-        """Get top N results by metric"""
+        """Get top N results"""
         return self.results[:n]
 
     def get_results_dataframe(self) -> pd.DataFrame:
-        """Convert results to pandas DataFrame for analysis"""
+        """Convert results to DataFrame"""
         data = []
         for result in self.results:
             row = result.params.copy()
@@ -210,12 +199,12 @@ class WalkForwardAnalyzer:
     """
     Walk-forward analysis for strategy validation
 
-    Splits data into multiple train/test windows:
-    - Train on in-sample data to find best parameters
-    - Test on out-of-sample data with those parameters
-    - Repeat for each window
+    Splits data into train/test windows:
+    1. Train on in-sample data to find best params
+    2. Test on out-of-sample data with those params
+    3. Repeat for each window
 
-    This simulates realistic parameter reoptimization over time.
+    Simulates realistic parameter reoptimization over time.
     """
 
     def __init__(
@@ -228,15 +217,13 @@ class WalkForwardAnalyzer:
         metric: str = 'sharpe_ratio'
     ):
         """
-        Initialize walk-forward analyzer
-
         Args:
             strategy_factory: Function creating strategy from params
-            param_grid: Parameter ranges to test
-            train_size: Number of periods for training
-            test_size: Number of periods for testing
-            anchored: If True, training window grows; if False, it slides
-            metric: Metric to optimize on
+            param_grid: Parameter ranges
+            train_size: Training period length
+            test_size: Testing period length
+            anchored: If True, training window expands; if False, it slides
+            metric: Optimization metric
         """
         self.strategy_factory = strategy_factory
         self.param_grid = param_grid
@@ -254,13 +241,7 @@ class WalkForwardAnalyzer:
         """
         Run walk-forward analysis
 
-        Args:
-            data: Market data (dict mapping symbols to bar lists)
-            initial_capital: Starting capital
-            verbose: Print progress
-
-        Returns:
-            WalkForwardResult with all analysis
+        Returns WalkForwardResult with full analysis
         """
         from . import run_backtest
         from .analytics import calculate_all_metrics
@@ -284,9 +265,11 @@ class WalkForwardAnalyzer:
             train_end = train_start + self.train_size
             test_end = train_end + self.test_size
 
+            # split data into train and test
             train_data = {symbol: bars[train_start:train_end]}
             test_data = {symbol: bars[train_end:test_end]}
 
+            # optimize on training data
             optimizer = GridSearchOptimizer(
                 strategy_factory=self.strategy_factory,
                 param_grid=self.param_grid,
@@ -308,6 +291,7 @@ class WalkForwardAnalyzer:
             best_result = train_results[0]
             best_params = best_result.params
 
+            # test on out-of-sample data
             strategy = self.strategy_factory(**best_params)
             test_backtest = run_backtest(
                 strategy=strategy,
@@ -345,6 +329,7 @@ class WalkForwardAnalyzer:
         if not out_of_sample_results:
             raise ValueError("No valid walk-forward windows. Check data size and parameter grid.")
 
+        # aggregate metrics across windows
         overall_sharpe = np.mean([r['sharpe_ratio'] for r in out_of_sample_results])
         overall_return = np.mean([r['total_return'] for r in out_of_sample_results])
         overall_dd = np.mean([r['max_drawdown'] for r in out_of_sample_results])
@@ -366,9 +351,7 @@ class WalkForwardAnalyzer:
 
     def plot_stability(self, result: WalkForwardResult):
         """
-        Plot parameter stability over windows
-
-        Shows how optimal parameters change over time
+        Plot how optimal parameters change over windows
         """
         try:
             import matplotlib.pyplot as plt
@@ -408,16 +391,18 @@ def monte_carlo_validation(
     """
     Monte Carlo validation of strategy robustness
 
+    Resamples the data to see how sensitive results are to data ordering.
+
     Args:
         strategy_factory: Function to create strategy
         params: Strategy parameters
         data: Market data
-        n_simulations: Number of Monte Carlo runs
+        n_simulations: Number of simulations
         initial_capital: Starting capital
         method: 'bootstrap' or 'shuffle'
 
     Returns:
-        Dictionary with arrays of simulated metrics
+        Dict with arrays of simulated metrics
     """
     from . import run_backtest
     from .analytics import calculate_all_metrics
