@@ -218,6 +218,9 @@ def calculate_calmar_ratio(annualized_return: float, max_drawdown: float) -> flo
     if max_drawdown >= 0:
         return 0.0
 
+    if abs(max_drawdown) < 0.001:  # Avoid division by near-zero
+        return 0.0
+
     return annualized_return / abs(max_drawdown)
 
 

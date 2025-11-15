@@ -14,7 +14,8 @@ namespace quantcore {
     public:
         static BarSeries load(const std::string& filepath,
                               const std::string& symbol = "",
-                              bool has_header = true) {
+                              bool has_header = true,
+                              double max_skip_pct = 0.20) { // fails if 20% of lines were skipped
             std::ifstream file(filepath);
             if (!file.is_open()) {
                 throw std::runtime_error("Could not open file: " + filepath);
@@ -39,16 +40,28 @@ namespace quantcore {
                     auto bar = parse_line(line, symbol);
                     bars.push_back(bar);
                 } catch (const std::exception& e) {
-                    std::cerr << "skipping line " << line_nr
+                    std::cerr << "WARNING: skipping line " << line_nr
                               << " in " << filepath << ": " << e.what() << "\n";
                     skipped_lines++;
                     continue;
                 }
             }
 
+            // Check if too many lines were skipped
+            double skip_pct = static_cast<double>(skipped_lines) / line_nr;
+            if (skip_pct > max_skip_pct) {
+                throw std::runtime_error(
+                    "Data quality error: " + std::to_string(skipped_lines) +
+                    " out of " + std::to_string(line_nr) +
+                    " lines skipped (" + std::to_string(skip_pct * 100) +
+                    "%), exceeds threshold of " + std::to_string(max_skip_pct * 100) + "%"
+                );
+            }
+
             if (skipped_lines > 0) {
-                std::cerr << "Skipped " << skipped_lines
-                          << " lines out of " << line_nr << " total lines\n";
+                std::cerr << "INFO: Skipped " << skipped_lines
+                          << " lines out of " << line_nr << " total lines ("
+                          << (skip_pct * 100) << "%)\n";
             }
 
             if (bars.empty()) {
@@ -95,7 +108,8 @@ namespace quantcore {
                 bar.close = std::stod(tokens[5]);
                 bar.volume = std::stod(tokens[6]);
             } else {
-                throw std::runtime_error("Invalid CSV format");
+                throw std::runtime_error("Invalid CSV format: expected 6 or 7 columns, got " +
+                                       std::to_string(tokens.size()));
             }
 
             return bar;

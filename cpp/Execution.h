@@ -218,7 +218,7 @@ private:
 
         if (we_are_buyer) {
             bool is_taker = true;
-            double fee = calculate_fee(price, quantity, !is_taker);
+            double fee = calculate_fee(price, quantity, is_taker);
             total_fees_ += fee;
             realized_pnl_ -= fee;
 
@@ -254,7 +254,7 @@ private:
 
         if (we_are_seller) {
             bool is_taker = true; // In backtest, we're always takers against market maker
-            double fee = calculate_fee(price, quantity, !is_taker);
+            double fee = calculate_fee(price, quantity, is_taker);
             total_fees_ += fee;
             realized_pnl_ -= fee;
 

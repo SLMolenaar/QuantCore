@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <stdexcept>
 
 namespace quantcore {
 
@@ -21,6 +22,7 @@ namespace quantcore {
         BarData(const std::string& sym, int64_t ts, double o, double h, double l, double c, double v)
             : symbol(sym), timestamp_ns(ts), open(o), high(h), low(l), close(c), volume(v)
         {
+            validate();
         }
 
         // Get typical price (HLC/3)
@@ -38,6 +40,27 @@ namespace quantcore {
 
         bool is_bearish() const {
             return close < open;
+        }
+
+    private:
+        void validate() const {
+            // Validate OHLC relationships
+            if (high < low) {
+                throw std::invalid_argument("Bar validation failed: high < low");
+            }
+            if (open > high || open < low) {
+                throw std::invalid_argument("Bar validation failed: open outside high/low range");
+            }
+            if (close > high || close < low) {
+                throw std::invalid_argument("Bar validation failed: close outside high/low range");
+            }
+            if (volume < 0) {
+                throw std::invalid_argument("Bar validation failed: negative volume");
+            }
+            // Check for reasonable price values
+            if (open <= 0 || high <= 0 || low <= 0 || close <= 0) {
+                throw std::invalid_argument("Bar validation failed: non-positive prices");
+            }
         }
     };
 

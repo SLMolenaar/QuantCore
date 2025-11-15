@@ -86,7 +86,7 @@ class ParameterGrid:
 
     def __len__(self):
         """Total number of combinations"""
-        return np.prod([len(vals) for vals in self.param_values])
+        return int(np.prod([len(vals) for vals in self.param_values]))
 
 
 class GridSearchOptimizer:
@@ -205,6 +205,8 @@ class WalkForwardAnalyzer:
     3. Repeat for each window
 
     Simulates realistic parameter reoptimization over time.
+
+    NOTE: Anchored mode is not fully implemented. Use anchored=False for rolling windows.
     """
 
     def __init__(
@@ -222,13 +224,15 @@ class WalkForwardAnalyzer:
             param_grid: Parameter ranges
             train_size: Training period length
             test_size: Testing period length
-            anchored: If True, training window expands; if False, it slides
+            anchored: If True, training window expands; if False, it slides (ROLLING ONLY SUPPORTED)
             metric: Optimization metric
         """
         self.strategy_factory = strategy_factory
         self.param_grid = param_grid
         self.train_size = train_size
         self.test_size = test_size
+        if anchored:
+            raise NotImplementedError("Anchored walk-forward is not yet implemented. Use anchored=False for rolling windows.")
         self.anchored = anchored
         self.metric = metric
 
@@ -257,17 +261,21 @@ class WalkForwardAnalyzer:
         out_of_sample_results = []
         best_params_per_window = []
 
-        train_start = 0
+        # Rolling window implementation
+        current_pos = 0
         window_num = 0
 
-        while train_start + self.train_size + self.test_size <= total_periods:
+        while current_pos + self.train_size + self.test_size <= total_periods:
             window_num += 1
-            train_end = train_start + self.train_size
-            test_end = train_end + self.test_size
 
-            # split data into train and test
+            train_start = current_pos
+            train_end = current_pos + self.train_size
+            test_start = train_end
+            test_end = test_start + self.test_size
+
+            # split data into train and test (no overlap)
             train_data = {symbol: bars[train_start:train_end]}
-            test_data = {symbol: bars[train_end:test_end]}
+            test_data = {symbol: bars[test_start:test_end]}
 
             # optimize on training data
             optimizer = GridSearchOptimizer(
@@ -284,8 +292,8 @@ class WalkForwardAnalyzer:
             )
 
             if not train_results:
-                if not self.anchored:
-                    train_start = train_end
+                # No valid results, move window forward
+                current_pos = test_end
                 continue
 
             best_result = train_results[0]
@@ -323,8 +331,8 @@ class WalkForwardAnalyzer:
             out_of_sample_results.append(oos_result)
             best_params_per_window.append(best_params)
 
-            if not self.anchored:
-                train_start = train_end
+            # Move to next window (rolling: jump by test_size to avoid overlap)
+            current_pos = test_end
 
         if not out_of_sample_results:
             raise ValueError("No valid walk-forward windows. Check data size and parameter grid.")

@@ -92,6 +92,9 @@ private:
                 ? mid_price * (1.0 - offset)
                 : mid_price * (1.0 + offset);
 
+            // Ensure price is positive
+            price = std::max(0.01, price);
+
             Price price_cents = static_cast<Price>(price * 100.0);
             Quantity quantity = calc_quantity(level, volume);
 

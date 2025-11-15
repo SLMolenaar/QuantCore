@@ -16,6 +16,10 @@
 #include <map>
 #include <vector>
 #include <stdexcept>
+#include <deque>
+#include <numeric>
+#include <cmath>
+#include <iostream>
 
 namespace quantcore {
 
@@ -31,6 +35,9 @@ public:
         , mm_levels_(5)
         , mm_spread_(0.0001)
         , mm_depth_(100000)
+        , default_volatility_(0.02)
+        , default_stop_distance_(0.05)
+        , volatility_lookback_(20)
     {
         if (initial_capital <= 0.0) {
             throw std::invalid_argument("Initial capital must be positive");
@@ -82,6 +89,18 @@ public:
         mm_depth_ = depth;
     }
 
+    void set_volatility_params(double default_vol, double stop_distance, size_t lookback) {
+        if (default_vol <= 0.0 || default_vol > 1.0) {
+            throw std::invalid_argument("Default volatility must be between 0 and 1");
+        }
+        if (stop_distance <= 0.0 || stop_distance > 1.0) {
+            throw std::invalid_argument("Stop distance must be between 0 and 1");
+        }
+        default_volatility_ = default_vol;
+        default_stop_distance_ = stop_distance;
+        volatility_lookback_ = lookback;
+    }
+
     double run() {
         if (!strat_) {
             throw std::runtime_error("No strategy set");
@@ -94,6 +113,7 @@ public:
         engines_.clear();
         mms_.clear();
         last_px_.clear();
+        price_history_.clear();
         curr_cap_ = init_cap_;
         next_oid_ = 1;
         strat_->reset();
@@ -111,6 +131,7 @@ public:
             mms_[symbol] = std::make_shared<MarketMaker>(
                 mm_spread_, mm_levels_, mm_depth_
             );
+            price_history_[symbol] = std::deque<double>();
         }
 
         load_data();
@@ -183,6 +204,7 @@ private:
     std::map<std::string, std::shared_ptr<ExecutionEngine>> engines_;
     std::map<std::string, std::shared_ptr<MarketMaker>> mms_;
     std::map<std::string, double> last_px_;
+    std::map<std::string, std::deque<double>> price_history_;
 
     double init_cap_;
     double curr_cap_;
@@ -198,6 +220,10 @@ private:
     int mm_levels_;
     double mm_spread_;
     Quantity mm_depth_;
+
+    double default_volatility_;
+    double default_stop_distance_;
+    size_t volatility_lookback_;
 
     void load_data() {
         for (const auto& [symbol, bars] : data_) {
@@ -224,10 +250,68 @@ private:
         portfolio_->set_cash(curr_cap_ + total_pnl);
     }
 
+    double calculate_volatility(const std::string& symbol) const {
+        auto it = price_history_.find(symbol);
+        if (it == price_history_.end() || it->second.size() < 2) {
+            return default_volatility_;
+        }
+
+        const auto& prices = it->second;
+        if (prices.size() < 2) {
+            return default_volatility_;
+        }
+
+        size_t n = std::min(prices.size(), volatility_lookback_);
+
+        // Need at least 2 prices to calculate returns
+        if (n < 2) return default_volatility_;
+
+        // Calculate returns using the most recent n prices
+        std::vector<double> returns;
+        returns.reserve(n - 1);
+
+        size_t start_idx = prices.size() - n;
+        for (size_t i = start_idx + 1; i < prices.size(); ++i) {
+            if (prices[i-1] <= 0.0) {
+                continue; // Skip invalid prices
+            }
+            double ret = (prices[i] - prices[i-1]) / prices[i-1];
+            returns.push_back(ret);
+        }
+
+        if (returns.empty()) {
+            return default_volatility_;
+        }
+
+        // Calculate standard deviation
+        double mean = std::accumulate(returns.begin(), returns.end(), 0.0) / returns.size();
+        double sq_sum = 0.0;
+        for (double ret : returns) {
+            sq_sum += (ret - mean) * (ret - mean);
+        }
+        double variance = sq_sum / returns.size();
+        double vol = std::sqrt(variance);
+
+        // Annualize (assuming daily data, 252 trading days)
+        vol *= std::sqrt(252.0);
+
+        // Clamp to reasonable range [0.1% to 100%]
+        return std::max(0.001, std::min(1.0, vol));
+    }
+
     void handle_md(EventPtr event) {
         auto md = std::static_pointer_cast<MarketDataEvent>(event);
         std::string symbol = md->get_symbol();
-        last_px_[symbol] = md->get_close();
+        double price = md->get_close();
+        last_px_[symbol] = price;
+
+        // Update price history for volatility calculation
+        auto& hist = price_history_[symbol];
+        hist.push_back(price);
+        // Keep a bit more than needed for lookback
+        if (hist.size() > volatility_lookback_ + 10) {
+            hist.pop_front();
+        }
 
         auto ee_it = engines_.find(symbol);
         if (ee_it != engines_.end()) {
@@ -251,16 +335,36 @@ private:
         if (px_it == last_px_.end()) return;
 
         double curr_px = px_it->second;
-        if (curr_px == 0.0) return;
+        if (curr_px <= 0.0) return;
+
+        // Validate signal strength - warn if outside normal range but allow it
+        double strength = sig->get_strength();
+        if (strength < 0.0) {
+            std::cerr << "WARNING: Negative signal strength (" << strength
+                      << ") from " << sig->get_strategy_id() << ", ignoring signal\n";
+            return;
+        }
+        if (strength > 2.0) {
+            std::cerr << "WARNING: Very high signal strength (" << strength
+                      << ") from " << sig->get_strategy_id()
+                      << ", this will create large positions\n";
+        }
+        if (strength < 0.01) {
+            return; // Signal too weak
+        }
 
         auto ee_it = engines_.find(sig->get_symbol());
         if (ee_it == engines_.end()) return;
 
         double curr_pos = ee_it->second->get_position();
 
+        // Calculate actual volatility from recent price data
+        double portfolio_vol = calculate_volatility(sig->get_symbol());
+        double stop_distance = default_stop_distance_;
+
         PositionSizingContext ctx(
-            sig->get_strength(), curr_cap_, curr_px,
-            curr_pos, 0.02, 0.05  // TODO: calc actual vol
+            strength, curr_cap_, curr_px,
+            curr_pos, portfolio_vol, stop_distance
         );
         double target = sizer_->calculate_size(ctx);
 
@@ -275,10 +379,14 @@ private:
         double delta;
 
         if (sig->get_signal_type() == SignalType::BUY) {
+            // When buying, we need to pay the ask (market price + half spread)
+            // Place limit order at ask to ensure fill
             ord_px = curr_px * (1.0 + spread / 2.0);
             delta = target - curr_pos;
             ord_side = Side::Buy;
         } else if (sig->get_signal_type() == SignalType::SELL) {
+            // When selling, we hit the bid (market price - half spread)
+            // Place limit order at bid to ensure fill
             ord_px = curr_px * (1.0 - spread / 2.0);
             delta = curr_pos - target;
             ord_side = Side::Sell;
@@ -286,8 +394,10 @@ private:
             return;
         }
 
+        // Must have meaningful position change
         if (std::abs(delta) < 1.0) return;
 
+        // Check risk limits before placing order
         auto risk_check = risk_mgr_->check_order(
             sig->get_symbol(),
             ord_side,
@@ -296,6 +406,7 @@ private:
         );
 
         if (!risk_check.is_approved()) {
+            // Risk check failed - don't place order
             return;
         }
 
