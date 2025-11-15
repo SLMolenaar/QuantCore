@@ -1,18 +1,10 @@
 """
 Build script for QuantCore Python bindings
 
-This script handles:
-- Finding CMake
-- Configuring and building the C++ extension
-- Copying the built module to the correct location
-- Testing the build
+Handles CMake configuration, building, and testing the C++ extension.
 
 Usage:
     python build_module.py [--clean] [--test]
-
-Options:
-    --clean     Clean build directory before building
-    --test      Run tests after building
 """
 
 import subprocess
@@ -24,7 +16,7 @@ from pathlib import Path
 
 
 class Colors:
-    """ANSI color codes for terminal output"""
+    """ANSI color codes"""
     BLUE = '\033[94m'
     GREEN = '\033[92m'
     YELLOW = '\033[93m'
@@ -34,40 +26,32 @@ class Colors:
 
 
 def print_header(msg):
-    """Print formatted header"""
     print(f"\n{Colors.BOLD}{Colors.BLUE}{'=' * 60}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.BLUE}{msg:^60}{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.BLUE}{'=' * 60}{Colors.RESET}\n")
 
 
 def print_success(msg):
-    """Print success message"""
     print(f"{Colors.GREEN}✓{Colors.RESET} {msg}")
 
 
 def print_error(msg):
-    """Print error message"""
     print(f"{Colors.RED}✗{Colors.RESET} {msg}")
 
 
 def print_warning(msg):
-    """Print warning message"""
     print(f"{Colors.YELLOW}⚠{Colors.RESET} {msg}")
 
 
 def print_info(msg):
-    """Print info message"""
     print(f"  {msg}")
 
 
 def find_cmake():
     """
     Find cmake.exe in common locations
-
-    Returns:
-        Path to cmake executable or None if not found
     """
-    # Try common paths first
+    # common paths
     possible_paths = [
         r"C:\Program Files\CMake\bin\cmake.exe",
         r"C:\Program Files (x86)\CMake\bin\cmake.exe",
@@ -78,7 +62,7 @@ def find_cmake():
         if path and Path(path).exists():
             return path
 
-    # Try JetBrains CLion bundled CMake
+    # try JetBrains CLion bundled CMake
     try:
         jetbrains_base = Path(r"C:\Program Files\JetBrains")
         if jetbrains_base.exists():
@@ -88,7 +72,7 @@ def find_cmake():
     except:
         pass
 
-    # Try Visual Studio bundled CMake
+    # try Visual Studio bundled CMake
     try:
         vs_paths = [
             r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
@@ -101,7 +85,7 @@ def find_cmake():
     except:
         pass
 
-    # Try Linux/Mac paths
+    # Linux/Mac paths
     linux_paths = [
         "/usr/bin/cmake",
         "/usr/local/bin/cmake",
@@ -117,15 +101,14 @@ def find_cmake():
 
 def check_dependencies():
     """
-    Check that all dependencies are available
+    Check that dependencies are available
 
-    Returns:
-        tuple: (success, messages)
+    Returns (success, messages)
     """
     messages = []
     success = True
 
-    # Check Python
+    # check Python version
     python_version = sys.version_info
     if python_version < (3, 8):
         messages.append(f"Python 3.8+ required (found {python_version.major}.{python_version.minor})")
@@ -133,7 +116,7 @@ def check_dependencies():
     else:
         messages.append(f"Python {python_version.major}.{python_version.minor}.{python_version.micro}")
 
-    # Check pybind11
+    # check pybind11
     try:
         import pybind11
         messages.append(f"pybind11 {pybind11.__version__}")
@@ -141,7 +124,7 @@ def check_dependencies():
         messages.append("pybind11 not found (pip install pybind11)")
         success = False
 
-    # Check CMake
+    # check CMake
     cmake_path = find_cmake()
     if cmake_path:
         try:
@@ -163,7 +146,7 @@ def check_dependencies():
 
 
 def clean_build_dir(build_dir):
-    """Remove build directory if it exists"""
+    """Remove build directory"""
     if build_dir.exists():
         print_info(f"Removing {build_dir}")
         shutil.rmtree(build_dir)
@@ -171,15 +154,9 @@ def clean_build_dir(build_dir):
 
 
 def configure_cmake(python_dir, build_dir, cmake_path, python_exe):
-    """
-    Configure CMake
-
-    Returns:
-        bool: Success
-    """
+    """Configure CMake"""
     print_info("Configuring CMake...")
 
-    # Detect platform
     import platform
     is_windows = platform.system() == "Windows"
 
@@ -191,13 +168,12 @@ def configure_cmake(python_dir, build_dir, cmake_path, python_exe):
         f"-DPython3_EXECUTABLE={python_exe}"
     ]
 
-    # On Windows with Visual Studio, force 64-bit architecture
+    # force 64-bit on Windows with Visual Studio
     if is_windows:
         cmake_args.extend(["-A", "x64"])
 
     try:
         subprocess.run(cmake_args, cwd=python_dir, check=True, capture_output=True, text=True)
-
         print_success("CMake configured successfully")
         return True
 
@@ -213,12 +189,7 @@ def configure_cmake(python_dir, build_dir, cmake_path, python_exe):
 
 
 def build_cmake(python_dir, cmake_path):
-    """
-    Build with CMake
-
-    Returns:
-        bool: Success
-    """
+    """Build with CMake"""
     print_info("Building with CMake...")
 
     try:
@@ -245,14 +216,9 @@ def build_cmake(python_dir, cmake_path):
 def find_built_module(build_dir):
     """
     Find the built module file
-
-    Returns:
-        Path to built module or None
     """
-    # Possible extensions
     extensions = [".pyd", ".so", ".dll", ".dylib"]
 
-    # Search paths
     search_paths = [
         build_dir / "Release",
         build_dir / "Debug",
@@ -274,9 +240,6 @@ def find_built_module(build_dir):
 def copy_module(built_file, python_dir):
     """
     Copy built module to quantcore package
-
-    Returns:
-        Path to destination or None on failure
     """
     dest = python_dir / "quantcore" / built_file.name
     dest.parent.mkdir(exist_ok=True)
@@ -291,21 +254,14 @@ def copy_module(built_file, python_dir):
 
 
 def test_import(python_dir):
-    """
-    Test importing the module
-
-    Returns:
-        bool: Success
-    """
+    """Test importing the module"""
     print_info("Testing module import...")
 
     try:
-        # Add quantcore to path
         sys.path.insert(0, str(python_dir))
 
         import quantcore
 
-        # Test basic functionality
         version = quantcore.version()
         hello = quantcore.hello()
 
@@ -321,12 +277,7 @@ def test_import(python_dir):
 
 
 def run_tests(python_dir):
-    """
-    Run pytest if available
-
-    Returns:
-        bool: Success
-    """
+    """Run pytest if available"""
     print_info("Running tests...")
 
     try:
@@ -356,20 +307,13 @@ def run_tests(python_dir):
 def build(clean=False, run_test=False):
     """
     Main build function
-
-    Args:
-        clean: Whether to clean build directory first
-        run_test: Whether to run tests after building
-
-    Returns:
-        bool: Success
     """
     print_header("QuantCore Python Bindings - Build Script")
 
     python_dir = Path(__file__).parent
     build_dir = python_dir / "build"
 
-    # Check dependencies
+    # check dependencies
     print_info("Checking dependencies...")
     deps_ok, messages = check_dependencies()
     for msg in messages:
@@ -384,7 +328,7 @@ def build(clean=False, run_test=False):
 
     print()
 
-    # Get paths
+    # get paths
     cmake_path = find_cmake()
     python_exe = sys.executable
 
@@ -393,20 +337,20 @@ def build(clean=False, run_test=False):
     print_info(f"Build dir: {build_dir}")
     print()
 
-    # Clean if requested
+    # clean if requested
     if clean and build_dir.exists():
         clean_build_dir(build_dir)
         print()
 
-    # Configure
+    # configure
     if not configure_cmake(python_dir, build_dir, cmake_path, python_exe):
         return False
 
-    # Build
+    # build
     if not build_cmake(python_dir, cmake_path):
         return False
 
-    # Find built module
+    # find built module
     print_info("Locating built module...")
     built_file = find_built_module(build_dir)
 
@@ -420,26 +364,26 @@ def build(clean=False, run_test=False):
 
     print_success(f"Found: {built_file}")
 
-    # Copy module
+    # copy module
     dest = copy_module(built_file, python_dir)
     if not dest:
         return False
 
     print()
 
-    # Test import
+    # test import
     if not test_import(python_dir):
         return False
 
     print()
 
-    # Run tests if requested
+    # run tests if requested
     if run_test:
         if not run_tests(python_dir):
             print_warning("Tests failed but build succeeded")
         print()
 
-    # Success!
+    # success
     print_header("Build Successful!")
     print_success("Module ready to use")
     print()
