@@ -47,18 +47,23 @@ public:
     }
 
     // execute order through orderbook
-    // returns trades tht occurred
+    // returns trades that occurred
     Trades execute_order(OrderPointer order) {
         if (!order) {
             throw std::invalid_argument("Cannot execute null order");
         }
 
-        orders_owned_[order->GetOrderId()] = order->GetSide();
+        OrderId order_id = order->GetOrderId();
+        orders_owned_[order_id] = order->GetSide();
+
+        // Determine if we're a taker (crossing the spread) or maker (resting in book)
+        bool is_taker = can_match_immediately(order);
 
         auto trades = orderbook_.AddOrder(order);
 
+        // Update positions - all trades from this order use the same fee type
         for (const auto& trade : trades) {
-            update_position(trade);
+            update_position(trade, is_taker);
         }
 
         return trades;
@@ -73,7 +78,8 @@ public:
         auto trades = orderbook_.MatchOrder(modify);
 
         for (const auto& trade : trades) {
-            update_position(trade);
+            // Modified orders that trade immediately are takers
+            update_position(trade, true);
         }
 
         return trades;
@@ -191,11 +197,24 @@ private:
     double unrealized_pnl_;
     double total_fees_;
 
-    void update_position(const Trade& trade) {
+    // Check if order will match immediately (making us a taker)
+    bool can_match_immediately(OrderPointer order) const {
+        if (order->GetSide() == Side::Buy) {
+            Price best_ask = get_best_ask();
+            if (best_ask == 0) return false;
+            return order->GetPrice() >= best_ask;
+        } else {
+            Price best_bid = get_best_bid();
+            if (best_bid == 0) return false;
+            return order->GetPrice() <= best_bid;
+        }
+    }
+
+    void update_position(const Trade& trade, bool is_taker) {
         const auto& bid_trade = trade.GetBidTrade();
         const auto& ask_trade = trade.GetAskTrade();
 
-        // cnvert cents to dollar
+        // convert cents to dollar
         double quantity = static_cast<double>(bid_trade.quantity_);
         double price = static_cast<double>(bid_trade.price_) / 100.0;
 
@@ -217,7 +236,6 @@ private:
         double current_avg_price = get_average_price();
 
         if (we_are_buyer) {
-            bool is_taker = true;
             double fee = calculate_fee(price, quantity, is_taker);
             total_fees_ += fee;
             realized_pnl_ -= fee;
@@ -228,9 +246,10 @@ private:
                 realized_pnl_ += cover_qty * (current_avg_price - price);
 
                 if (quantity > -current_position) {
+                    // Covered short and going long
                     double new_long_qty = quantity + current_position;
                     positions_[symbol_] = new_long_qty;
-                    avg_prices_[symbol_] = price; // New position starts at current price
+                    avg_prices_[symbol_] = price; // New long position starts at current price
                 } else {
                     // Still short or flat
                     positions_[symbol_] = current_position + quantity;
@@ -253,7 +272,6 @@ private:
         }
 
         if (we_are_seller) {
-            bool is_taker = true; // In backtest, we're always takers against market maker
             double fee = calculate_fee(price, quantity, is_taker);
             total_fees_ += fee;
             realized_pnl_ -= fee;
@@ -264,6 +282,7 @@ private:
                 realized_pnl_ += sell_qty * (price - current_avg_price);
 
                 if (quantity > current_position) {
+                    // Sold long and going short
                     double new_short_qty = -(quantity - current_position);
                     positions_[symbol_] = new_short_qty;
                     avg_prices_[symbol_] = price;
@@ -289,9 +308,9 @@ private:
         }
     }
 
-    double calculate_fee(double price, double quantity, bool is_maker) const {
+    double calculate_fee(double price, double quantity, bool is_taker) const {
         double notional = price * quantity;
-        double fee_rate = is_maker ? config_.maker_fee : config_.taker_fee;
+        double fee_rate = is_taker ? config_.taker_fee : config_.maker_fee;
         return notional * fee_rate;
     }
 

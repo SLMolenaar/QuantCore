@@ -38,6 +38,7 @@ public:
         , default_volatility_(0.02)
         , default_stop_distance_(0.05)
         , volatility_lookback_(20)
+        , bars_per_year_(252)
     {
         if (initial_capital <= 0.0) {
             throw std::invalid_argument("Initial capital must be positive");
@@ -99,6 +100,18 @@ public:
         default_volatility_ = default_vol;
         default_stop_distance_ = stop_distance;
         volatility_lookback_ = lookback;
+    }
+
+    // set number of bars per year for annualizing volatility
+    void set_bars_per_year(size_t bars_per_year) {
+        if (bars_per_year == 0) {
+            throw std::invalid_argument("Bars per year must be positive");
+        }
+        bars_per_year_ = bars_per_year;
+    }
+
+    size_t get_bars_per_year() const {
+        return bars_per_year_;
     }
 
     double run() {
@@ -224,6 +237,10 @@ private:
     double default_volatility_;
     double default_stop_distance_;
     size_t volatility_lookback_;
+    size_t bars_per_year_;
+
+    // Buffer size to avoid frequent reallocation of price history deque
+    static constexpr size_t PRICE_HISTORY_BUFFER = 10;
 
     void load_data() {
         for (const auto& [symbol, bars] : data_) {
@@ -292,8 +309,8 @@ private:
         double variance = sq_sum / returns.size();
         double vol = std::sqrt(variance);
 
-        // Annualize (assuming daily data, 252 trading days)
-        vol *= std::sqrt(252.0);
+        // Annualize using configured bars per year
+        vol *= std::sqrt(static_cast<double>(bars_per_year_));
 
         // Clamp to reasonable range [0.1% to 100%]
         return std::max(0.001, std::min(1.0, vol));
@@ -309,7 +326,7 @@ private:
         auto& hist = price_history_[symbol];
         hist.push_back(price);
         // Keep a bit more than needed for lookback
-        if (hist.size() > volatility_lookback_ + 10) {
+        if (hist.size() > volatility_lookback_ + PRICE_HISTORY_BUFFER) {
             hist.pop_front();
         }
 
