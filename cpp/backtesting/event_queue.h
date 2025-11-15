@@ -55,7 +55,11 @@ namespace quantcore {
         // Comparator for min-heap
         struct EventComparator {
             bool operator()(const EventPtr& lhs, const EventPtr& rhs) const {
-                return lhs->get_timestamp() > rhs->get_timestamp();
+                if (lhs->get_timestamp() != rhs->get_timestamp()) {
+                    return lhs->get_timestamp() > rhs->get_timestamp();
+                }
+                // Tie-break by event type: m_data < sig < order < fill
+                return lhs->get_type() > rhs->get_type();
             }
         };
 

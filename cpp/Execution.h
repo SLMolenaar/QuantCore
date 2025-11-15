@@ -221,21 +221,21 @@ private:
         auto bid_it = orders_owned_.find(bid_trade.orderId_);
         auto ask_it = orders_owned_.find(ask_trade.orderId_);
 
-        bool we_are_buyer = (bid_it != orders_owned_.end() && bid_it->second == Side::Buy);
-        bool we_are_seller = (ask_it != orders_owned_.end() && ask_it->second == Side::Sell);
+        bool were_buyer = (bid_it != orders_owned_.end() && bid_it->second == Side::Buy);
+        bool were_seller = (ask_it != orders_owned_.end() && ask_it->second == Side::Sell);
 
-        if (!we_are_buyer && !we_are_seller) {
+        if (!were_buyer && !were_seller) {
             return;
         }
 
-        if (we_are_buyer && we_are_seller) {
-            return;
+        if (were_buyer && were_seller) {
+            throw std::logic_error("Wash trade detected: order matched against itself");
         }
 
         double current_position = get_position();
         double current_avg_price = get_average_price();
 
-        if (we_are_buyer) {
+        if (were_buyer) {
             double fee = calculate_fee(price, quantity, is_taker);
             total_fees_ += fee;
             realized_pnl_ -= fee;
@@ -271,7 +271,7 @@ private:
             orders_owned_.erase(bid_trade.orderId_);
         }
 
-        if (we_are_seller) {
+        if (were_seller) {
             double fee = calculate_fee(price, quantity, is_taker);
             total_fees_ += fee;
             realized_pnl_ -= fee;
@@ -309,6 +309,9 @@ private:
     }
 
     double calculate_fee(double price, double quantity, bool is_taker) const {
+        if (price <= 0.0 || quantity <= 0.0) {
+            throw std::invalid_argument("Price and quantity must be positive");
+        }
         double notional = price * quantity;
         double fee_rate = is_taker ? config_.taker_fee : config_.maker_fee;
         return notional * fee_rate;

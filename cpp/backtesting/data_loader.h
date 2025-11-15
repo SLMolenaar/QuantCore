@@ -68,7 +68,7 @@ namespace quantcore {
                 throw std::runtime_error("No valid data loaded from file: " + filepath);
             }
 
-            // sort by timestamp (just in case)
+            // sort by timestamp (just in case the data isn't sorted already)
             std::sort(bars.begin(), bars.end(),
                       [](const BarData& a, const BarData& b) {
                           return a.timestamp_ns < b.timestamp_ns;

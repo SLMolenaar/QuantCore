@@ -289,7 +289,7 @@ private:
 
         size_t start_idx = prices.size() - n;
         for (size_t i = start_idx + 1; i < prices.size(); ++i) {
-            if (prices[i-1] <= 0.0) {
+            if (prices[i-1] <= 0.0 || prices[i] <= 0.0) {
                 continue; // Skip invalid prices
             }
             double ret = (prices[i] - prices[i-1]) / prices[i-1];
