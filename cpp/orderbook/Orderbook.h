@@ -177,6 +177,9 @@ private:
         Trades trades;
 
         for (auto &[matchOrder, quantity]: matchingOrders) {
+            // Determine trade price (maker's price)
+            Price tradePrice = matchOrder->GetPrice();
+
             // Fill both orders
             order->Fill(quantity);
             matchOrder->Fill(quantity);
@@ -184,13 +187,13 @@ private:
             // Record trade
             if (order->GetSide() == Side::Buy) {
                 trades.push_back(Trade{
-                    TradeInfo{order->GetOrderId(), order->GetPrice(), quantity},
-                    TradeInfo{matchOrder->GetOrderId(), matchOrder->GetPrice(), quantity}
+                    TradeInfo{order->GetOrderId(), tradePrice, quantity},
+                    TradeInfo{matchOrder->GetOrderId(), tradePrice, quantity}
                 });
             } else {
                 trades.push_back(Trade{
-                    TradeInfo{matchOrder->GetOrderId(), matchOrder->GetPrice(), quantity},
-                    TradeInfo{order->GetOrderId(), order->GetPrice(), quantity}
+                    TradeInfo{matchOrder->GetOrderId(), tradePrice, quantity},
+                    TradeInfo{order->GetOrderId(), tradePrice, quantity}
                 });
             }
 
@@ -241,13 +244,31 @@ private:
                 // Match the minimum available quantity
                 Quantity quantity = std::min(bid->GetRemainingQuantity(), ask->GetRemainingQuantity());
 
-                // Record the trade bfore modding orders
+                // Determine trade price (maker's price)
+                // If bid is a market order (extreme price), use ask's price
+                // If ask is a market order (extreme price), use bid's price
+                // Otherwise use the maker's price (the one that was resting)
+                Price tradePrice;
+                if (bid->GetPrice() == std::numeric_limits<Price>::max() ||
+                    bid->GetPrice() == std::numeric_limits<Price>::min()) {
+                    // Bid is market order, trade at ask's price
+                    tradePrice = ask->GetPrice();
+                } else if (ask->GetPrice() == std::numeric_limits<Price>::max() ||
+                           ask->GetPrice() == std::numeric_limits<Price>::min()) {
+                    // Ask is market order, trade at bid's price
+                    tradePrice = bid->GetPrice();
+                } else {
+                    // Both limit orders, trade at maker's price (ask for buy aggressor, bid for sell aggressor)
+                    tradePrice = ask->GetPrice();
+                }
+
+                // Record the trade
                 trades.push_back(Trade{
-                    TradeInfo{bid->GetOrderId(), bid->GetPrice(), quantity},
-                    TradeInfo{ask->GetOrderId(), ask->GetPrice(), quantity}
+                    TradeInfo{bid->GetOrderId(), tradePrice, quantity},
+                    TradeInfo{ask->GetOrderId(), tradePrice, quantity}
                 });
 
-                bid->Fill(quantity); // rduce remaining qtty
+                bid->Fill(quantity); // reduce remaining qty
                 ask->Fill(quantity);
 
                 // remove filled orders

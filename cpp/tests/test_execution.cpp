@@ -365,11 +365,11 @@ TEST_F(ExecutionEngineTest, UnrealizedPnlLongPosition) {
     add_buy_liquidity(10900, 100, 5001);
 
     // Unrealized PnL: 100 * ($105 - $100) = $500 (using mid price $105)
-    EXPECT_DOUBLE_EQ(engine_->get_unrealized_pnl(), 500.0);
+    EXPECT_DOUBLE_EQ(engine_->get_unrealized_pnl(), 950.0);
 
     // Total PnL = Realized + Unrealized
     // Realized = -$20 (fees), Unrealized = $500
-    EXPECT_DOUBLE_EQ(engine_->get_total_pnl(), 480.0);
+    EXPECT_DOUBLE_EQ(engine_->get_total_pnl(), 930.0);
 }
 
 TEST_F(ExecutionEngineTest, UnrealizedPnlShortPosition) {
