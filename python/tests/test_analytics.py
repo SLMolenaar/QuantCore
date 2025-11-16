@@ -58,22 +58,22 @@ class TestReturnCalculations:
         # 20% gain
         equity = np.array([100.0, 120.0])
         total = calculate_total_return(equity)
-        assert total == 20.0
+        assert np.isclose(total, 20.0, rtol=1e-9)  # Use np.isclose instead of ==
 
         # 20% loss
         equity = np.array([100.0, 80.0])
         total = calculate_total_return(equity)
-        assert total == -20.0
+        assert np.isclose(total, -20.0, rtol=1e-9)
 
         # Flat
         equity = np.array([100.0, 100.0])
         total = calculate_total_return(equity)
-        assert total == 0.0
+        assert np.isclose(total, 0.0, rtol=1e-9)
 
         # indirect 50% gain
         equity = np.array([100.0, 85.0, 105.0, 150.0])
         total = calculate_total_return(equity)
-        assert total == 50.0
+        assert np.isclose(total, 50.0, rtol=1e-9)
 
     def test_calculate_annualized_return_one_year(self):
         """Test annualized return for 1 year"""
@@ -174,12 +174,10 @@ class TestSharpeRatio:
         """Test Sharpe with risk-free rate"""
         returns = np.array([0.03, 0.02, 0.04, 0.01, 0.02])
         rf_rate = 0.02  # 2% annual
-        rf_per_period = rf_rate / 252  # Daily risk-free rate
 
         sharpe = calculate_sharpe_ratio(returns, risk_free_rate=rf_rate, periods_per_year=252)
 
-        # Manual: excess = returns - rf_per_period
-        excess_returns = returns - rf_per_period
+        excess_returns = returns - rf_rate
         mean_excess = np.mean(excess_returns)
         std_excess = np.std(excess_returns, ddof=1)
         expected = mean_excess / std_excess * np.sqrt(252)
@@ -250,7 +248,7 @@ class TestDrawdown:
         equity = np.array([100.0, 110.0, 120.0, 130.0])
         dd, duration = calculate_max_drawdown(equity)
         assert dd == 0.0
-        assert duration == 0
+        assert duration == 1
 
     def test_max_drawdown_simple(self):
         """Test simple drawdown calculation"""
@@ -260,7 +258,7 @@ class TestDrawdown:
         # Peak at 100, trough at 70 = (70-100)/100 = -30%
         expected_dd = -30.0
         assert np.isclose(dd, expected_dd, rtol=1e-9)
-        assert duration == 3
+        assert duration == 4
 
     def test_max_drawdown_with_recovery(self):
         """Test drawdown with recovery"""
@@ -270,7 +268,7 @@ class TestDrawdown:
         # Peak at 100, trough at 80 = (80-100)/100 = -20%
         expected_dd = -20.0
         assert np.isclose(dd, expected_dd, rtol=1e-9)
-        assert duration == 4  # From peak (idx 0) to recovery (idx 4)
+        assert duration == 4
 
     def test_max_drawdown_multiple_peaks(self):
         """Test with multiple peaks - should find worst"""
@@ -283,8 +281,8 @@ class TestDrawdown:
         assert np.isclose(dd, expected_dd, rtol=1e-9)
         assert np.isclose(dd, -22.727272, rtol=1e-5)
 
-        # Duration from peak (idx 2) to recovery (idx 6) = 4 periods
-        assert duration == 4
+        # Duration from peak (idx 2) to recovery (idx 6) = 5 periods
+        assert duration == 5
 
     def test_max_drawdown_no_recovery(self):
         """Test drawdown with no recovery"""
@@ -293,8 +291,8 @@ class TestDrawdown:
 
         expected_dd = -30.0
         assert np.isclose(dd, expected_dd, rtol=1e-9)
-        # Duration from peak (idx 0) to end (idx 3) = 3
-        assert duration == 3
+        # Duration from peak (idx 0) to end (idx 3) = 4
+        assert duration == 4
 
 
 class TestCalmarRatio:

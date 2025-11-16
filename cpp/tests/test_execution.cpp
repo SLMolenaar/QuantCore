@@ -20,14 +20,13 @@ protected:
         engine_ = std::make_unique<ExecutionEngine>("TEST", config_);
     }
 
-    // Helper: add liquidity to book (becomes maker)
+    // add liquidity to book (becomes maker)
     void add_sell_liquidity(Price price, Quantity quantity, OrderId order_id = 9999) {
         auto order = std::make_shared<Order>(
             OrderType::GoodTillCancel, order_id, Side::Sell, price, quantity
         );
         engine_->get_orderbook().AddOrder(order);
     }
-
     void add_buy_liquidity(Price price, Quantity quantity, OrderId order_id = 9998) {
         auto order = std::make_shared<Order>(
             OrderType::GoodTillCancel, order_id, Side::Buy, price, quantity
@@ -538,9 +537,4 @@ TEST_F(ExecutionEngineTest, GetBestBidAsk) {
 
     EXPECT_EQ(engine_->get_best_bid(), 9900);  // In cents
     EXPECT_EQ(engine_->get_best_ask(), 10100);
-}
-
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
 }
