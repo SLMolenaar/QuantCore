@@ -152,6 +152,7 @@ public:
         equity_.push_back(init_cap_);
         timestamps_.push_back(0);
 
+        // main loop
         while (!eq_.empty()) {
             auto event = eq_.pop();
 
@@ -170,6 +171,7 @@ public:
                     break;
             }
 
+            // update portfolio every time new data is processed
             if (event->get_type() == EventType::MARKET_DATA) {
                 update_portfolio();
                 double port_val = calc_portfolio_val();

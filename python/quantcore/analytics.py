@@ -122,26 +122,19 @@ def calculate_volatility(returns: np.ndarray, periods_per_year: int = 252) -> fl
     return np.std(returns) * np.sqrt(periods_per_year) * 100.0
 
 
-def calculate_sharpe_ratio(
-        returns: np.ndarray,
-        risk_free_rate: float = 0.0,
-        periods_per_year: int = 252
-) -> float:
-    """
-    Sharpe ratio
-    """
+def calculate_sharpe_ratio(returns, risk_free_rate=0.0, periods_per_year=252):
     if len(returns) == 0:
         return 0.0
 
-    # convert annual risk-free rate to per-period
-    rf_per_period = risk_free_rate / periods_per_year
+    excess_returns = returns - risk_free_rate
+    mean_excess = np.mean(excess_returns)
+    std_excess = np.std(excess_returns, ddof=1)
 
-    excess_returns = returns - rf_per_period
-
-    if np.std(excess_returns) == 0:
+    # Handle zero or near-zero volatility
+    if std_excess < 1e-10:
         return 0.0
 
-    sharpe = np.mean(excess_returns) / np.std(excess_returns) * np.sqrt(periods_per_year)
+    sharpe = mean_excess / std_excess * np.sqrt(periods_per_year)
     return sharpe
 
 

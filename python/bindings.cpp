@@ -119,6 +119,7 @@ PYBIND11_MODULE(_core, m) {
                    py::arg("filepath"),
                    py::arg("symbol") = "",
                    py::arg("has_header") = true,
+                   py::arg("max_skip_pct") = 0.20,
                    "Load OHLCV data from CSV file");
 
     // ============================================================================
@@ -223,7 +224,7 @@ PYBIND11_MODULE(_core, m) {
     // STRATEGY
     // ============================================================================
 
-    py::class_<Strategy, PyStrategy, std::shared_ptr<Strategy>>(m, "Strategy")
+py::class_<Strategy, PyStrategy, std::shared_ptr<Strategy>>(m, "Strategy")
         .def(py::init<const std::string&>(),
              py::arg("name") = "Strategy")
         .def("on_data", &Strategy::on_data,
@@ -237,7 +238,23 @@ PYBIND11_MODULE(_core, m) {
         .def("has_signals", &Strategy::has_signals,
              "Check if strategy has pending signals")
         .def("reset", &Strategy::reset,
-             "Reset strategy state");
+             "Reset strategy state")
+        .def("generate_signal", &Strategy::generate_signal,
+             py::arg("symbol"),
+             py::arg("signal_type"),
+             py::arg("strength") = 1.0,
+             py::arg("timestamp_ns") = 0,
+             "Generate a trading signal")
+        .def("set_position", &Strategy::set_position,
+             py::arg("symbol"),
+             py::arg("quantity"),
+             "Set position for a symbol")
+        .def("get_position", &Strategy::get_position,
+             py::arg("symbol"),
+             "Get current position for a symbol")
+        .def("has_position", &Strategy::has_position,
+             py::arg("symbol"),
+             "Check if strategy has position in symbol");
 
     // ============================================================================
     // BUILT-IN STRATEGIES

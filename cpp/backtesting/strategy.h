@@ -40,7 +40,6 @@ public:
         positions_.clear();
     }
 
-protected:
     void generate_signal(const std::string& symbol,
                         SignalType sig_type,
                         double strength = 1.0,
