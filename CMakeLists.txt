@@ -48,6 +48,7 @@ add_executable(QuantCore ${CPP_SOURCES}
         cpp/strategies/mean_reversion.h
         cpp/backtesting/market_maker.h
         cpp/backtesting/position_sizer.h
+        cpp/tests/QuantCoreTests.cpp
 )
 
 # Link libraries if needed

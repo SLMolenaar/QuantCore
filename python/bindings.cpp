@@ -120,7 +120,7 @@ PYBIND11_MODULE(_core, m) {
                    py::arg("symbol") = "",
                    py::arg("has_header") = true,
                    py::arg("max_skip_pct") = 0.20,
-                   "Load OHLCV data from CSV file");
+                   py::arg("max_skip_pct") = 0.20);
 
     // ============================================================================
     // EVENTS
