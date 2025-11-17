@@ -538,3 +538,351 @@ TEST_F(ExecutionEngineTest, GetBestBidAsk) {
     EXPECT_EQ(engine_->get_best_bid(), 9900);  // In cents
     EXPECT_EQ(engine_->get_best_ask(), 10100);
 }
+
+// ============================================================================
+// PNL CONSISTENCY & EDGE CASES
+// ============================================================================
+
+TEST_F(ExecutionEngineTest, PnLConsistencyInvariantGoldenRule) {
+
+    // Trade 1: Buy 100 @ $100
+    add_sell_liquidity(10000, 100);
+    auto buy1 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1, Side::Buy, 10000, 100
+    );
+    engine_->execute_order(buy1);
+
+    // Trade 2: Buy 50 more @ $105
+    add_sell_liquidity(10500, 50);
+    auto buy2 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 2, Side::Buy, 10500, 50
+    );
+    engine_->execute_order(buy2);
+
+    // Trade 3: Sell 75 @ $110 (partial close)
+    add_buy_liquidity(11000, 75);
+    auto sell1 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 3, Side::Sell, 11000, 75
+    );
+    engine_->execute_order(sell1);
+
+    // Trade 4: Sell 100 @ $108 (close and flip to short)
+    add_buy_liquidity(10800, 100);
+    auto sell2 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 4, Side::Sell, 10800, 100
+    );
+    engine_->execute_order(sell2);
+
+    double avg_after_2 = (100.0 * 100.0 + 50.0 * 105.0) / 150.0;
+    double realized_from_trade3 = 75.0 * (110.0 - avg_after_2);
+    double realized_from_trade4 = 75.0 * (108.0 - avg_after_2);
+
+    double expected_realized = realized_from_trade3 + realized_from_trade4 - 68.60;
+
+    EXPECT_NEAR(engine_->get_realized_pnl(), expected_realized, 0.01);
+
+    // Add market quotes for unrealized PnL
+    add_buy_liquidity(10750, 100, 5000);
+    add_sell_liquidity(10850, 100, 5001);
+    // Mid = $108
+
+    double unrealized = engine_->get_unrealized_pnl();
+    // Short 25 @ $108, current $108: unrealized = 25 * (108 - 108) = 0
+    EXPECT_NEAR(unrealized, 0.0, 0.01);
+
+    double total_from_components = engine_->get_realized_pnl() + engine_->get_unrealized_pnl();
+    double total_direct = engine_->get_total_pnl();
+    EXPECT_DOUBLE_EQ(total_from_components, total_direct);
+}
+
+TEST_F(ExecutionEngineTest, ThousandSmallTradesNoRoundingAccumulation) {
+    // 1000 individual 1-share trades
+    ExecutionEngine engine1("TEST", config_);
+    for (int i = 0; i < 1000; ++i) {
+        auto& ob1 = engine1.get_orderbook();
+        auto sell = std::make_shared<Order>(
+            OrderType::GoodTillCancel, 10000 + i, Side::Sell, 10000, 1
+        );
+        ob1.AddOrder(sell);
+
+        auto buy = std::make_shared<Order>(
+            OrderType::GoodTillCancel, i + 1, Side::Buy, 10000, 1
+        );
+        engine1.execute_order(buy);
+    }
+
+    // large trade of 1000 shares
+    ExecutionEngine engine2("TEST", config_);
+    auto& ob2 = engine2.get_orderbook();
+    auto sell_large = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 99999, Side::Sell, 10000, 1000
+    );
+    ob2.AddOrder(sell_large);
+
+    auto buy_large = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1, Side::Buy, 10000, 1000
+    );
+    engine2.execute_order(buy_large);
+
+    EXPECT_DOUBLE_EQ(engine1.get_position(), 1000.0);
+    EXPECT_DOUBLE_EQ(engine2.get_position(), 1000.0);
+    EXPECT_DOUBLE_EQ(engine1.get_average_price(), 100.0);
+    EXPECT_DOUBLE_EQ(engine2.get_average_price(), 100.0);
+
+    // FIXED: Use EXPECT_NEAR for accumulated floating point values
+    EXPECT_NEAR(engine1.get_total_fees(), 200.0, 0.01);
+    EXPECT_NEAR(engine2.get_total_fees(), 200.0, 0.01);
+    EXPECT_NEAR(engine1.get_realized_pnl(), -200.0, 0.01);
+    EXPECT_NEAR(engine2.get_realized_pnl(), -200.0, 0.01);
+}
+
+TEST_F(ExecutionEngineTest, VeryLargePositionValuesBillions) {
+    // Get direct access to orderbook
+    auto& ob = engine_->get_orderbook();
+
+    // Add sell liquidity for the large buy order
+    auto sell_order = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 10000, Side::Sell, 10000, 10000000
+    );
+    ob.AddOrder(sell_order);
+
+    // Buy 10 million shares @ $100 = $1 billion position
+    auto buy = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1, Side::Buy, 10000, 10000000
+    );
+    engine_->execute_order(buy);
+
+    EXPECT_EQ(engine_->get_position(), 10000000.0);
+    EXPECT_EQ(engine_->get_average_price(), 100.0);
+    EXPECT_DOUBLE_EQ(engine_->get_total_fees(), 2000000.0);
+    EXPECT_DOUBLE_EQ(engine_->get_realized_pnl(), -2000000.0);
+
+    // Add buy liquidity for the sell order
+    auto buy_liquidity = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 10001, Side::Buy, 10100, 10000000
+    );
+    ob.AddOrder(buy_liquidity);
+
+    // Sell at $101 for $10M gross profit
+    auto sell = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 2, Side::Sell, 10100, 10000000
+    );
+    engine_->execute_order(sell);
+
+    double expected_net = 10000000.0 - 4020000.0;
+    EXPECT_DOUBLE_EQ(engine_->get_realized_pnl(), expected_net);
+    EXPECT_EQ(engine_->get_position(), 0.0);
+}
+
+TEST_F(ExecutionEngineTest, PennyStockLowPricePrecision) {
+    // Stock at $0.50 (50 cents)
+    add_sell_liquidity(50, 1000);
+    auto buy = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1, Side::Buy, 50, 1000
+    );
+    engine_->execute_order(buy);
+
+    EXPECT_EQ(engine_->get_position(), 1000.0);
+    EXPECT_DOUBLE_EQ(engine_->get_average_price(), 0.50);
+    EXPECT_DOUBLE_EQ(engine_->get_total_fees(), 1.0);
+
+    // Sell at $0.51 (1 cent profit per share)
+    add_buy_liquidity(51, 1000);
+    auto sell = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 2, Side::Sell, 51, 1000
+    );
+    engine_->execute_order(sell);
+
+    EXPECT_NEAR(engine_->get_realized_pnl(), 7.98, 0.0001);
+    EXPECT_DOUBLE_EQ(engine_->get_total_fees(), 2.02);
+}
+
+TEST_F(ExecutionEngineTest, OneCentStockMinimumPrice) {
+    /**
+     * Test minimum representable price (1 cent)
+     */
+
+    // Stock at $0.01 (1 cent)
+    add_sell_liquidity(1, 10000);
+    auto buy = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1, Side::Buy, 1, 10000
+    );
+    engine_->execute_order(buy);
+
+    EXPECT_EQ(engine_->get_position(), 10000.0);
+    EXPECT_DOUBLE_EQ(engine_->get_average_price(), 0.01);
+
+    // Fee: 10000 * $0.01 * 0.002 = $0.20
+    EXPECT_DOUBLE_EQ(engine_->get_total_fees(), 0.20);
+
+    // Sell at $0.02 (100% profit!)
+    add_buy_liquidity(2, 10000);
+    auto sell = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 2, Side::Sell, 2, 10000
+    );
+    engine_->execute_order(sell);
+
+    // Gross profit: 10000 * $0.01 = $100
+    // Fees: $0.20 + $0.40 = $0.60
+    // Net: $100 - $0.60 = $99.40
+    EXPECT_DOUBLE_EQ(engine_->get_realized_pnl(), 99.40);
+}
+
+TEST_F(ExecutionEngineTest, SingleSharePositionClosedResets) {
+    /**
+     * Test that closing a single-share position resets average price
+     */
+
+    // Buy 1 share @ $100
+    add_sell_liquidity(10000, 1);
+    auto buy = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1, Side::Buy, 10000, 1
+    );
+    engine_->execute_order(buy);
+
+    EXPECT_EQ(engine_->get_position(), 1.0);
+    EXPECT_EQ(engine_->get_average_price(), 100.0);
+
+    // Sell 1 share @ $110
+    add_buy_liquidity(11000, 1);
+    auto sell = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 2, Side::Sell, 11000, 1
+    );
+    engine_->execute_order(sell);
+
+    // Position should be exactly zero
+    EXPECT_EQ(engine_->get_position(), 0.0);
+
+    // Average price must reset to zero
+    EXPECT_EQ(engine_->get_average_price(), 0.0);
+
+    // Realized PnL: $10 profit - fees
+    // Fees: ($100 * 0.002) + ($110 * 0.002) = $0.20 + $0.22 = $0.42
+    // Net: $10 - $0.42 = $9.58
+    EXPECT_DOUBLE_EQ(engine_->get_realized_pnl(), 9.58);
+}
+
+TEST_F(ExecutionEngineTest, FeesCalculatedPerTradeNotPerFill) {
+    auto& ob = engine_->get_orderbook();
+
+    // Add 3 sell orders at same price (will create 3 separate fills)
+    auto sell1 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1001, Side::Sell, 10000, 30
+    );
+    auto sell2 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1002, Side::Sell, 10000, 40
+    );
+    auto sell3 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1003, Side::Sell, 10000, 30
+    );
+
+    ob.AddOrder(sell1);
+    ob.AddOrder(sell2);
+    ob.AddOrder(sell3);
+
+    // Our buy order fills against all three (3 separate fills)
+    auto buy = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1, Side::Buy, 10000, 100
+    );
+    auto trades = engine_->execute_order(buy);
+
+    // Should generate 3 fills
+    EXPECT_EQ(trades.size(), 3);
+
+    // Fee should be calculated once on total notional: 100 * 100 * 0.002 = $20
+    EXPECT_DOUBLE_EQ(engine_->get_total_fees(), 20.0);
+    EXPECT_EQ(engine_->get_position(), 100.0);
+}
+
+TEST_F(ExecutionEngineTest, RapidPositionFlipsLongShortLong) {
+    // Long 100 @ $100
+    add_sell_liquidity(10000, 100);
+    auto buy1 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1, Side::Buy, 10000, 100
+    );
+    engine_->execute_order(buy1);
+
+    EXPECT_EQ(engine_->get_position(), 100.0);
+    EXPECT_EQ(engine_->get_average_price(), 100.0);
+
+    // Flip to short 50 (sell 150 @ $105)
+    add_buy_liquidity(10500, 150);
+    auto sell1 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 2, Side::Sell, 10500, 150
+    );
+    engine_->execute_order(sell1);
+
+    EXPECT_EQ(engine_->get_position(), -50.0);
+    EXPECT_EQ(engine_->get_average_price(), 105.0);
+
+    // Flip to long 100 (buy 150 @ $102)
+    add_sell_liquidity(10200, 150);
+    auto buy2 = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 3, Side::Buy, 10200, 150
+    );
+    engine_->execute_order(buy2);
+
+    EXPECT_EQ(engine_->get_position(), 100.0);
+    EXPECT_EQ(engine_->get_average_price(), 102.0);
+
+    double expected_realized = 567.9;
+    EXPECT_NEAR(engine_->get_realized_pnl(), expected_realized, 0.01);
+    EXPECT_DOUBLE_EQ(engine_->get_total_fees(), 82.1);
+}
+
+TEST_F(ExecutionEngineTest, UnrealizedPnLWithNoMarketQuotes) {
+    /**
+     * Unrealized PnL should be zero if no market quotes available
+     */
+
+    // Open position
+    add_sell_liquidity(10000, 100);
+    auto buy = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1, Side::Buy, 10000, 100
+    );
+    engine_->execute_order(buy);
+
+    EXPECT_EQ(engine_->get_position(), 100.0);
+
+    // No quotes in book, unrealized PnL should be zero
+    EXPECT_DOUBLE_EQ(engine_->get_unrealized_pnl(), 0.0);
+}
+
+TEST_F(ExecutionEngineTest, UnrealizedPnLWithOneSidedMarket) {
+    /**
+     * Unrealized PnL with only bid or only ask
+     */
+
+    // Open long position
+    add_sell_liquidity(10000, 100);
+    auto buy = std::make_shared<Order>(
+        OrderType::GoodTillCancel, 1, Side::Buy, 10000, 100
+    );
+    engine_->execute_order(buy);
+
+    EXPECT_EQ(engine_->get_position(), 100.0);
+    EXPECT_EQ(engine_->get_average_price(), 100.0);
+
+    // Add only ask (no bid)
+    add_sell_liquidity(10500, 100, 5000);
+
+    // Mid price should use ask: $105
+    auto mid = engine_->get_mid_price();
+    ASSERT_TRUE(mid.has_value());
+    EXPECT_DOUBLE_EQ(mid.value(), 105.0);
+
+    // Unrealized: 100 * ($105 - $100) = $500
+    EXPECT_DOUBLE_EQ(engine_->get_unrealized_pnl(), 500.0);
+}
+
+TEST_F(ExecutionEngineTest, ZeroQuantityOrderRejected) {
+    /**
+     * Orders with zero quantity should be rejected by Order constructor
+     */
+
+    EXPECT_THROW({
+        auto order = std::make_shared<Order>(
+            OrderType::GoodTillCancel, 1, Side::Buy, 10000, 0
+        );
+    }, std::invalid_argument);
+}

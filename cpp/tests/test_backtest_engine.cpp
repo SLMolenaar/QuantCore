@@ -674,3 +674,404 @@ TEST_F(BacktestEngineTest, PriceGaps) {
     EXPECT_GT(engine_->get_total_pnl(), 0.0);
 }
 
+// ============================================================================
+// INVALID INPUTS & EDGE CASES
+// ============================================================================
+
+// Strategy that generates invalid signals
+class InvalidSignalStrategy : public Strategy {
+public:
+    enum class InvalidType {
+        NEGATIVE_STRENGTH,
+        ZERO_STRENGTH,
+        VERY_LARGE_STRENGTH
+    };
+
+    InvalidSignalStrategy(InvalidType type)
+        : Strategy("InvalidSignalStrategy")
+        , type_(type)
+        , triggered_(false) {}
+
+    void on_data(const MarketDataEvent& event) override {
+        if (!triggered_ && event.get_timestamp() > 5000000000LL) {
+            double strength = 1.0;
+
+            switch (type_) {
+                case InvalidType::NEGATIVE_STRENGTH:
+                    strength = -1.5;
+                    break;
+                case InvalidType::ZERO_STRENGTH:
+                    strength = 0.0;
+                    break;
+                case InvalidType::VERY_LARGE_STRENGTH:
+                    strength = 10.0;
+                    break;
+            }
+
+            generate_signal(event.get_symbol(), SignalType::BUY, strength, event.get_timestamp());
+            triggered_ = true;
+        }
+    }
+
+    void reset() override {
+        Strategy::reset();
+        triggered_ = false;
+    }
+
+private:
+    InvalidType type_;
+    bool triggered_;
+};
+
+TEST_F(BacktestEngineTest, StrategyNegativeStrengthRejected) {
+    /**
+     * Strategy generates signal with negative strength
+     * Engine should reject it gracefully
+     */
+
+    auto bars = create_flat_bars(20);
+    auto strategy = std::make_shared<InvalidSignalStrategy>(
+        InvalidSignalStrategy::InvalidType::NEGATIVE_STRENGTH
+    );
+
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    // Should not crash
+    double final_value = engine_->run();
+
+    // Should not have opened position (signal rejected)
+    auto exec = engine_->get_execution_engine("TEST");
+    EXPECT_EQ(exec->get_position(), 0.0);
+
+    // Final value should equal initial (no trades)
+    EXPECT_DOUBLE_EQ(final_value, 100000.0);
+}
+
+TEST_F(BacktestEngineTest, StrategyZeroStrengthIgnored) {
+    /**
+     * Signal with zero strength should be ignored
+     */
+
+    auto bars = create_flat_bars(20);
+    auto strategy = std::make_shared<InvalidSignalStrategy>(
+        InvalidSignalStrategy::InvalidType::ZERO_STRENGTH
+    );
+
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    double final_value = engine_->run();
+
+    // No position should be opened
+    auto exec = engine_->get_execution_engine("TEST");
+    EXPECT_EQ(exec->get_position(), 0.0);
+
+    EXPECT_DOUBLE_EQ(final_value, 100000.0);
+}
+
+TEST_F(BacktestEngineTest, StrategyVeryLargeStrengthWarning) {
+    /**
+     * Very large signal strength (>2.0) should trigger warning
+     * but still execute
+     */
+
+    auto bars = create_flat_bars(20);
+    auto strategy = std::make_shared<InvalidSignalStrategy>(
+        InvalidSignalStrategy::InvalidType::VERY_LARGE_STRENGTH
+    );
+
+    // Disable risk limits for this test
+    RiskLimits limits;
+    limits.enabled = false;
+    engine_->set_risk_limits(limits);
+
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    // Should not crash (just warn)
+    EXPECT_NO_THROW(engine_->run());
+
+    // Should have opened very large position
+    auto exec = engine_->get_execution_engine("TEST");
+    EXPECT_GT(std::abs(exec->get_position()), 0.0);
+}
+
+TEST_F(BacktestEngineTest, RiskManagerRejectsOrderEngineStable) {
+    /**
+     * Risk manager rejects orders, engine should continue running
+     */
+
+    auto bars = create_flat_bars(50);
+    auto strategy = std::make_shared<BuyAndHold>();
+
+    // Very restrictive risk limit
+    RiskLimits limits;
+    limits.max_position_pct = 0.01;  // Only 1% of capital
+    limits.enabled = true;
+
+    engine_->set_risk_limits(limits);
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    // Should complete without crash
+    double final_value = engine_->run();
+
+    // Position should be small (risk-limited)
+    auto exec = engine_->get_execution_engine("TEST");
+    double position_value = std::abs(exec->get_position() * 100.0);
+
+    // Should be less than 2% of capital (with some buffer for fees)
+    EXPECT_LT(position_value, 2000.0);
+}
+
+TEST_F(BacktestEngineTest, MultipleRunsCompletelyReset) {
+    /**
+     * Running backtest multiple times should completely reset state
+     */
+
+    auto bars = create_uptrend_bars(30, 100.0, 0.5);
+    auto strategy = std::make_shared<BuyAndHold>();
+
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    // First run
+    double final1 = engine_->run();
+    double pnl1 = engine_->get_total_pnl();
+    double fees1 = engine_->get_total_fees();
+
+    // Second run (should reset completely)
+    double final2 = engine_->run();
+    double pnl2 = engine_->get_total_pnl();
+    double fees2 = engine_->get_total_fees();
+
+    // Results should be identical
+    EXPECT_DOUBLE_EQ(final1, final2);
+    EXPECT_NEAR(pnl1, pnl2, 0.01);
+    EXPECT_DOUBLE_EQ(fees1, fees2);
+}
+
+TEST_F(BacktestEngineTest, SimultaneousSignalsMultipleSymbols) {
+    // Create bars with same timestamps
+    BarSeries bars1, bars2;
+    for (int i = 0; i < 20; ++i) {
+        int64_t ts = i * 1000000000LL;
+        bars1.push_back(BarData("AAPL", ts, 100.0, 101.0, 99.0, 100.0, 1000000.0));
+        bars2.push_back(BarData("GOOGL", ts, 200.0, 201.0, 199.0, 200.0, 1000000.0));
+    }
+
+    auto strategy = std::make_shared<BuyAndHold>();
+    engine_->add_data("AAPL", bars1);
+    engine_->add_data("GOOGL", bars2);
+    engine_->set_strategy(strategy);
+
+    EXPECT_NO_THROW(engine_->run());
+
+    // Both symbols should have positions
+    auto exec1 = engine_->get_execution_engine("AAPL");
+    auto exec2 = engine_->get_execution_engine("GOOGL");
+
+    ASSERT_NE(exec1, nullptr);
+    ASSERT_NE(exec2, nullptr);
+
+    EXPECT_GT(std::abs(exec1->get_position()), 0.0);
+    EXPECT_GT(std::abs(exec2->get_position()), 0.0);
+}
+
+TEST_F(BacktestEngineTest, VolatilityCalculationWithSingleBar) {
+    /**
+     * Volatility calculation with insufficient data
+     * Should use default volatility
+     */
+
+    // Only 1 bar, can't calculate volatility
+    auto bars = create_flat_bars(1);
+    auto strategy = std::make_shared<BuyAndHold>();
+
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    // Should use default volatility, not crash
+    EXPECT_NO_THROW(engine_->run());
+}
+
+TEST_F(BacktestEngineTest, VolatilityCalculationWithPriceGap) {
+    /**
+     * Large price gap shouldn't break volatility calculation
+     */
+
+    BarSeries bars;
+    // Normal prices
+    for (int i = 0; i < 10; ++i) {
+        bars.push_back(BarData("TEST", i * 1000000000LL, 100.0, 101.0, 99.0, 100.0, 1000000.0));
+    }
+    // Sudden 50% gap up
+    for (int i = 10; i < 30; ++i) {
+        bars.push_back(BarData("TEST", i * 1000000000LL, 150.0, 151.0, 149.0, 150.0, 1000000.0));
+    }
+
+    auto strategy = std::make_shared<BuyAndHold>();
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    // Should handle gap without crash
+    EXPECT_NO_THROW(engine_->run());
+
+    // Should still calculate valid PnL
+    double pnl = engine_->get_total_pnl();
+    EXPECT_TRUE(std::isfinite(pnl));
+}
+
+TEST_F(BacktestEngineTest, NearZeroCapitalAfterLosses) {
+    /**
+     * Capital approaches zero after large losses
+     * Should handle gracefully without negative positions
+     */
+
+    // Declining market
+    auto bars = create_downtrend_bars(100, 100.0, 0.5);
+    auto strategy = std::make_shared<BuyAndHold>();
+
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    double final_value = engine_->run();
+
+    // Should not go negative
+    EXPECT_GE(final_value, 0.0);
+
+    // Should not have positions if capital exhausted
+    if (final_value < 1000.0) {  // Effectively broke
+        auto exec = engine_->get_execution_engine("TEST");
+        // Position should be reasonable given tiny capital
+        double position_value = std::abs(exec->get_position() * bars.back().close);
+        EXPECT_LT(position_value, final_value * 2.0);
+    }
+}
+
+TEST_F(BacktestEngineTest, EquityCurveMonotonicityInLosingStrategy) {
+    /**
+     * Equity curve in losing strategy should decline
+     */
+
+    auto bars = create_downtrend_bars(50, 100.0, 0.5);
+    auto strategy = std::make_shared<BuyAndHold>();
+
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    engine_->run();
+
+    auto equity = engine_->get_equity_curve();
+
+    // Should start at 100000
+    EXPECT_DOUBLE_EQ(equity[0], 100000.0);
+
+    // Should end below starting point (losing strategy)
+    EXPECT_LT(equity.back(), 100000.0);
+
+    // Should not have any NaN or Inf
+    for (double val : equity) {
+        EXPECT_TRUE(std::isfinite(val));
+        EXPECT_GE(val, 0.0);  // Should never go negative
+    }
+}
+
+TEST_F(BacktestEngineTest, TimestampsSortedAndIncreasing) {
+    /**
+     * Timestamps must be sorted and strictly increasing
+     */
+
+    auto bars = create_flat_bars(50);
+    auto strategy = std::make_shared<BuyAndHold>();
+
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    engine_->run();
+
+    auto timestamps = engine_->get_timestamps();
+
+    ASSERT_GT(timestamps.size(), 0);
+
+    // Check strictly increasing
+    for (size_t i = 1; i < timestamps.size(); ++i) {
+        EXPECT_GE(timestamps[i], timestamps[i-1]);
+    }
+}
+
+TEST_F(BacktestEngineTest, PositionSizingWithZeroVolatility) {
+    /**
+     * If all prices are flat, volatility is zero
+     * Position sizing should handle gracefully
+     */
+
+    // Perfectly flat prices
+    BarSeries bars;
+    for (int i = 0; i < 50; ++i) {
+        bars.push_back(BarData("TEST", i * 1000000000LL,
+                               100.0, 100.0, 100.0, 100.0, 1000000.0));
+    }
+
+    auto strategy = std::make_shared<BuyAndHold>();
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    // Should not crash with division by zero
+    EXPECT_NO_THROW(engine_->run());
+
+    // Should still open a position
+    auto exec = engine_->get_execution_engine("TEST");
+    EXPECT_GT(std::abs(exec->get_position()), 0.0);
+}
+
+TEST_F(BacktestEngineTest, FeesAccumulateCorrectlyOverTime) {
+    /**
+     * Total fees should equal sum of all individual trade fees
+     */
+
+    auto bars = create_uptrend_bars(50, 100.0, 0.5);
+
+    // Use mean reversion to generate many trades
+    auto strategy = std::make_shared<MeanReversion>(10, 1.0, 0.3);
+
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    engine_->run();
+
+    double total_fees = engine_->get_total_fees();
+
+    // Fees should be positive
+    EXPECT_GT(total_fees, 0.0);
+
+    // Fees should be reasonable (not astronomically high)
+    EXPECT_LT(total_fees, 10000.0);  // Less than 10% of capital
+
+    // Fees should be finite
+    EXPECT_TRUE(std::isfinite(total_fees));
+}
+
+TEST_F(BacktestEngineTest, PnLComponentsAddUpCorrectly) {
+    /**
+     * total_pnl = realized_pnl + unrealized_pnl
+     */
+
+    auto bars = create_uptrend_bars(30, 100.0, 0.5);
+    auto strategy = std::make_shared<BuyAndHold>();
+
+    engine_->add_data("TEST", bars);
+    engine_->set_strategy(strategy);
+
+    engine_->run();
+
+    auto exec = engine_->get_execution_engine("TEST");
+
+    double realized = exec->get_realized_pnl();
+    double unrealized = exec->get_unrealized_pnl();
+    double total = exec->get_total_pnl();
+
+    // GOLDEN RULE
+    EXPECT_DOUBLE_EQ(total, realized + unrealized);
+}

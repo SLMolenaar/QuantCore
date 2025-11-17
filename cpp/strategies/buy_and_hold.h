@@ -2,29 +2,31 @@
 
 #include "backtesting/strategy.h"
 #include "backtesting/market_data_event.h"
+#include <set>
 
 namespace quantcore {
 
-    // Just for testing backtesting engine
     class BuyAndHold : public Strategy {
     public:
-        BuyAndHold() : Strategy("BuyAndHold"), bought_(false) {}
+        BuyAndHold() : Strategy("BuyAndHold") {}
 
         void on_data(const MarketDataEvent& event) override {
-            // Buy once on first bar
-            if (!bought_) {
-                generate_signal(event.get_symbol(), SignalType::BUY, 1.0, event.get_timestamp());
-                bought_ = true;
+            std::string symbol = event.get_symbol();
+
+            // Buy once PER SYMBOL
+            if (bought_symbols_.find(symbol) == bought_symbols_.end()) {
+                generate_signal(symbol, SignalType::BUY, 1.0, event.get_timestamp());
+                bought_symbols_.insert(symbol);
             }
         }
 
         void reset() override {
             Strategy::reset();
-            bought_ = false;
+            bought_symbols_.clear();
         }
 
     private:
-        bool bought_;
+        std::set<std::string> bought_symbols_;  // Track per symbol, not global
     };
 
 }

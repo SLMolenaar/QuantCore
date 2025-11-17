@@ -1,5 +1,5 @@
 /**
- * Tests for Orderbook - Core Matching Engine
+ * Tests for Orderbook
  */
 
 #include <gtest/gtest.h>
@@ -239,9 +239,9 @@ TEST_F(OrderbookTest, MultiplePartialFills) {
 
 TEST_F(OrderbookTest, PriceTimePrioritySamePrice) {
     // Add three sell orders at same price
-    orderbook_->AddOrder(create_sell_order(1, 10000, 100));  // First
-    orderbook_->AddOrder(create_sell_order(2, 10000, 100));  // Second
-    orderbook_->AddOrder(create_sell_order(3, 10000, 100));  // Third
+    orderbook_->AddOrder(create_sell_order(1, 10000, 100));
+    orderbook_->AddOrder(create_sell_order(2, 10000, 100));
+    orderbook_->AddOrder(create_sell_order(3, 10000, 100));
 
     // Buy order matches first one (FIFO)
     auto buy_order = create_buy_order(4, 10000, 100);
@@ -417,7 +417,7 @@ TEST_F(OrderbookTest, ModifyNonExistentOrder) {
 }
 
 // ============================================================================
-// ORDER TYPES - MARKET ORDERS
+// ORDER TYPES, MARKET ORDERS
 // ============================================================================
 
 TEST_F(OrderbookTest, MarketOrderBuyWithLiquidity) {
@@ -486,7 +486,7 @@ TEST_F(OrderbookTest, MarketOrderSweepsMultipleLevels) {
 }
 
 // ============================================================================
-// ORDER TYPES - IMMEDIATE OR CANCEL (IOC)
+// ORDER TYPES, IMMEDIATE OR CANCEL (IOC)
 // ============================================================================
 
 TEST_F(OrderbookTest, IOCFullFill) {
@@ -531,7 +531,7 @@ TEST_F(OrderbookTest, IOCNoFillCancelled) {
 }
 
 // ============================================================================
-// ORDER TYPES - FILL OR KILL (FOK)
+// ORDER TYPES, FILL OR KILL (FOK)
 // ============================================================================
 
 TEST_F(OrderbookTest, FOKFullFillAvailable) {
@@ -603,7 +603,7 @@ TEST_F(OrderbookTest, FOKMultipleLevelsInsufficient) {
 }
 
 // ============================================================================
-// ORDER TYPES - GOOD FOR DAY (GFD)
+// ORDER TYPES, GOOD FOR DAY
 // ============================================================================
 
 TEST_F(OrderbookTest, GFDOrderAdded) {
@@ -618,7 +618,7 @@ TEST_F(OrderbookTest, GFDOrderAdded) {
 // Skipping comprehensive GFD tests as they require system time control
 
 // ============================================================================
-// EXCHANGE RULES - VALIDATION
+// EXCHANGE RULES, VALIDATION
 // ============================================================================
 
 TEST_F(OrderbookTest, TickSizeValidation) {
@@ -846,7 +846,7 @@ TEST_F(OrderbookTest, SelfMatchPrevention) {
     auto sell = create_sell_order(1, 10000, 100);
     auto trades = orderbook_->AddOrder(sell);
 
-    // Should not crash - duplicate ID rejected
+    // Should not crash, duplicate ID rejected
     EXPECT_TRUE(trades.empty());
 }
 
