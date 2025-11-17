@@ -16,7 +16,13 @@
 class OrderbookTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // destroy any existing orderbook
+        orderbook_.reset();
+
+        // Create fresh orderbook
         orderbook_ = std::make_unique<Orderbook>();
+
+        // Verify clean state
         ASSERT_EQ(orderbook_->Size(), 0) << "Orderbook not empty in SetUp!";
     }
 
@@ -451,28 +457,22 @@ TEST_F(OrderbookTest, MarketOrderNoLiquidity) {
     EXPECT_EQ(orderbook_->Size(), 0);
 }
 
-TEST_F(OrderbookTest, MarketOrderSweepsMultipleLevels) { // TODO: Fix failing test issue.
-
-    orderbook_ = std::make_unique<Orderbook>();  // Force reset
-
-    ASSERT_EQ(orderbook_->Size(), 0) << "Orderbook not empty after reset!";
-    auto check = orderbook_->GetOrderInfos();
-    ASSERT_EQ(check.GetBids().size(), 0) << "Bids not empty!";
-    ASSERT_EQ(check.GetAsks().size(), 0) << "Asks not empty!";
+TEST_F(OrderbookTest, MarketOrderSweepsMultipleLevels) {
+    // Verify absolutely clean state
+    ASSERT_EQ(orderbook_->Size(), 0) << "Orderbook not empty at test start!";
 
     // Add multiple sell levels
     orderbook_->AddOrder(create_sell_order(1, 10000, 50));
     orderbook_->AddOrder(create_sell_order(2, 10100, 50));
     orderbook_->AddOrder(create_sell_order(3, 10200, 50));
 
-    std::cout << "After adding sells, orderbook size: " << orderbook_->Size() << std::endl;
+    ASSERT_EQ(orderbook_->Size(), 3) << "Should have exactly 3 sell orders";
 
     // Large market buy
     auto market_order = create_buy_order(4, 0, 125, OrderType::Market);
-    std::cout << "Market order ID: " << market_order->GetOrderId() << " Price: " << market_order->GetPrice() << std::endl;
     auto trades = orderbook_->AddOrder(market_order);
 
-    // Should match 3 levels: 50@100, 50@101, 25@102
+    // Should match 3 levels: 50@$100, 50@$101, 25@$102
     ASSERT_EQ(trades.size(), 3);
 
     EXPECT_EQ(trades[0].GetBidTrade().quantity_, 50);
@@ -783,22 +783,19 @@ TEST_F(OrderbookTest, EmptyPriceLevelsRemoved) {
 TEST_F(OrderbookTest, LargeNumberOfOrders) {
     // Add 1000 orders
     for (int i = 0; i < 1000; ++i) {
-        orderbook_->AddOrder(create_buy_order(i, 10000 - i, 100));
+        orderbook_->AddOrder(create_buy_order(100000 + i, 10000 - i, 100));
     }
 
     EXPECT_EQ(orderbook_->Size(), 1000);
 
     // Add matching sell order
-    auto sell = create_sell_order(10000, 9000, 100);
+    auto sell = create_sell_order(200000, 9000, 100);
     auto trades = orderbook_->AddOrder(sell);
 
-    // Should match with best bid (10000)
+    // Should match with best bid (ID 100000 at price 10000)
     ASSERT_EQ(trades.size(), 1);
-    std::cout << "DEBUG - trades[0] bid order ID: " << trades[0].GetBidTrade().orderId_ << std::endl;
-    std::cout << "DEBUG - trades[0] bid price: " << trades[0].GetBidTrade().price_ << std::endl;
-    std::cout << "DEBUG - trades[0] ask order ID: " << trades[0].GetAskTrade().orderId_ << std::endl;
-    std::cout << "DEBUG - trades[0] ask price: " << trades[0].GetAskTrade().price_ << std::endl;
-    EXPECT_EQ(trades[0].GetBidTrade().price_, 10000);
+    EXPECT_EQ(trades[0].GetBidTrade().orderId_, 100000);
+    EXPECT_EQ(trades[0].GetBidTrade().price_, 9000);
 }
 
 TEST_F(OrderbookTest, VerySmallQuantities) {

@@ -244,21 +244,20 @@ private:
                 // Match the minimum available quantity
                 Quantity quantity = std::min(bid->GetRemainingQuantity(), ask->GetRemainingQuantity());
 
-                // Determine trade price (maker's price)
-                // If bid is a market order (extreme price), use ask's price
-                // If ask is a market order (extreme price), use bid's price
-                // Otherwise use the maker's price (the one that was resting)
                 Price tradePrice;
-                if (bid->GetPrice() == std::numeric_limits<Price>::max() ||
-                    bid->GetPrice() == std::numeric_limits<Price>::min()) {
-                    // Bid is market order, trade at ask's price
+
+                bool bidIsMarket = (bid->GetPrice() == std::numeric_limits<Price>::max() ||
+                                   bid->GetPrice() == std::numeric_limits<Price>::min());
+                bool askIsMarket = (ask->GetPrice() == std::numeric_limits<Price>::max() ||
+                                   ask->GetPrice() == std::numeric_limits<Price>::min());
+
+                if (bidIsMarket && !askIsMarket) {
                     tradePrice = ask->GetPrice();
-                } else if (ask->GetPrice() == std::numeric_limits<Price>::max() ||
-                           ask->GetPrice() == std::numeric_limits<Price>::min()) {
-                    // Ask is market order, trade at bid's price
+                } else if (askIsMarket && !bidIsMarket) {
                     tradePrice = bid->GetPrice();
+                } else if (bidIsMarket && askIsMarket) {
+                    tradePrice = ask->GetPrice();
                 } else {
-                    // Both limit orders, trade at maker's price (ask for buy aggressor, bid for sell aggressor)
                     tradePrice = ask->GetPrice();
                 }
 
@@ -303,7 +302,7 @@ private:
                 iocOrdersToCancel.push_back(orderId);
             }
         }
-         for (const auto &orderId: iocOrdersToCancel) {
+        for (const auto &orderId: iocOrdersToCancel) {
             CancelOrder(orderId);
         }
 
