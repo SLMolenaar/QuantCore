@@ -56,14 +56,18 @@ public:
         OrderId order_id = order->GetOrderId();
         orders_owned_[order_id] = order->GetSide();
 
-        // Determine if we're a taker (crossing the spread) or maker (resting in book)
         bool is_taker = can_match_immediately(order);
 
         auto trades = orderbook_.AddOrder(order);
 
-        // Update positions - all trades from this order use the same fee type
         for (const auto& trade : trades) {
             update_position(trade, is_taker);
+        }
+
+        // Remove from orders_owned_ after all trades processed
+        // Only remove if order was fully filled (not resting in book)
+        if (order->IsFilled()) {
+            orders_owned_.erase(order_id);
         }
 
         return trades;
@@ -210,76 +214,69 @@ private:
         }
     }
 
-    void update_position(const Trade& trade, bool is_taker) {
-        const auto& bid_trade = trade.GetBidTrade();
-        const auto& ask_trade = trade.GetAskTrade();
+void update_position(const Trade& trade, bool is_taker) {
+    const auto& bid_trade = trade.GetBidTrade();
+    const auto& ask_trade = trade.GetAskTrade();
 
-        // convert cents to dollar
-        double quantity = static_cast<double>(bid_trade.quantity_);
-        double price = static_cast<double>(bid_trade.price_) / 100.0;
+    double quantity = static_cast<double>(bid_trade.quantity_);
+    double price = static_cast<double>(bid_trade.price_) / 100.0;
 
-        auto bid_it = orders_owned_.find(bid_trade.orderId_);
-        auto ask_it = orders_owned_.find(ask_trade.orderId_);
+    auto bid_it = orders_owned_.find(bid_trade.orderId_);
+    auto ask_it = orders_owned_.find(ask_trade.orderId_);
 
-        bool were_buyer = (bid_it != orders_owned_.end() && bid_it->second == Side::Buy);
-        bool were_seller = (ask_it != orders_owned_.end() && ask_it->second == Side::Sell);
+    bool were_buyer = (bid_it != orders_owned_.end() && bid_it->second == Side::Buy);
+    bool were_seller = (ask_it != orders_owned_.end() && ask_it->second == Side::Sell);
 
-        if (!were_buyer && !were_seller) {
-            return;
-        }
+    if (!were_buyer && !were_seller) {
+        return;
+    }
 
-        if (were_buyer && were_seller) {
-            throw std::logic_error("Wash trade detected: order matched against itself");
-        }
+    if (were_buyer && were_seller) {
+        throw std::logic_error("Wash trade detected: order matched against itself");
+    }
 
-        double current_position = get_position();
-        double current_avg_price = get_average_price();
+    double current_position = get_position();
+    double current_avg_price = get_average_price();
 
-        if (were_buyer) {
-            double fee = calculate_fee(price, quantity, is_taker);
-            total_fees_ += fee;
-            realized_pnl_ -= fee;
+    if (were_buyer) {
+        double fee = calculate_fee(price, quantity, is_taker);
+        total_fees_ += fee;
+        realized_pnl_ -= fee;
 
-            if (current_position < 0) {
-                // Covering short position
-                double cover_qty = std::min(quantity, -current_position);
-                realized_pnl_ += cover_qty * (current_avg_price - price);
+        if (current_position < 0) {
+            double cover_qty = std::min(quantity, -current_position);
+            realized_pnl_ += cover_qty * (current_avg_price - price);
 
-                if (quantity > -current_position) {
-                    // Covered short and going long
-                    double new_long_qty = quantity + current_position;
-                    positions_[symbol_] = new_long_qty;
-                    avg_prices_[symbol_] = price; // New long position starts at current price
-                } else {
-                    // Still short or flat
-                    positions_[symbol_] = current_position + quantity;
-                    if (positions_[symbol_] == 0.0) {
-                        avg_prices_[symbol_] = 0.0;
-                    }
-                }
+            if (quantity > -current_position) {
+                double new_long_qty = quantity + current_position;
+                positions_[symbol_] = new_long_qty;
+                avg_prices_[symbol_] = price;
             } else {
-                // Adding to long or initiating long
-                if (current_position == 0.0) {
-                    avg_prices_[symbol_] = price;
-                } else {
-                    double total_cost = current_position * current_avg_price + quantity * price;
-                    avg_prices_[symbol_] = total_cost / (current_position + quantity);
-                }
                 positions_[symbol_] = current_position + quantity;
+                if (positions_[symbol_] == 0.0) {
+                    avg_prices_[symbol_] = 0.0;
+                }
             }
-
-            orders_owned_.erase(bid_trade.orderId_);
+        } else {
+            if (current_position == 0.0) {
+                avg_prices_[symbol_] = price;
+            } else {
+                double total_cost = current_position * current_avg_price + quantity * price;
+                avg_prices_[symbol_] = total_cost / (current_position + quantity);
+            }
+            positions_[symbol_] = current_position + quantity;
         }
+        // REMOVED: orders_owned_.erase(bid_trade.orderId_);
+    }
 
-        if (were_seller) {
-            double fee = calculate_fee(price, quantity, is_taker);
-            total_fees_ += fee;
-            realized_pnl_ -= fee;
+    if (were_seller) {
+        double fee = calculate_fee(price, quantity, is_taker);
+        total_fees_ += fee;
+        realized_pnl_ -= fee;
 
-            if (current_position > 0) {
-                // Reducing long position
-                double sell_qty = std::min(quantity, current_position);
-                realized_pnl_ += sell_qty * (price - current_avg_price);
+        if (current_position > 0) {
+            double sell_qty = std::min(quantity, current_position);
+            realized_pnl_ += sell_qty * (price - current_avg_price);
 
                 if (quantity > current_position) {
                     // Sold long and going short
@@ -303,8 +300,6 @@ private:
                 }
                 positions_[symbol_] = current_position - quantity;
             }
-
-            orders_owned_.erase(ask_trade.orderId_);
         }
     }
 

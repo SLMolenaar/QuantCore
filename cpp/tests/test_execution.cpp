@@ -640,6 +640,11 @@ TEST_F(ExecutionEngineTest, VeryLargePositionValuesBillions) {
     // Get direct access to orderbook
     auto& ob = engine_->get_orderbook();
 
+    // Set exchange rules to allow large quantities
+    ExchangeRules rules;
+    rules.maxQuantity = 100000000; // 100 million
+    ob.SetExchangeRules(rules);
+
     // Add sell liquidity for the large buy order
     auto sell_order = std::make_shared<Order>(
         OrderType::GoodTillCancel, 10000, Side::Sell, 10000, 10000000
@@ -762,7 +767,7 @@ TEST_F(ExecutionEngineTest, SingleSharePositionClosedResets) {
     EXPECT_DOUBLE_EQ(engine_->get_realized_pnl(), 9.58);
 }
 
-TEST_F(ExecutionEngineTest, FeesCalculatedPerTradeNotPerFill) {
+TEST_F(ExecutionEngineTest, FeesCalculatedPerFill) {
     auto& ob = engine_->get_orderbook();
 
     // Add 3 sell orders at same price (will create 3 separate fills)
@@ -789,7 +794,11 @@ TEST_F(ExecutionEngineTest, FeesCalculatedPerTradeNotPerFill) {
     // Should generate 3 fills
     EXPECT_EQ(trades.size(), 3);
 
-    // Fee should be calculated once on total notional: 100 * 100 * 0.002 = $20
+    // Fees are calculated per fill:
+    // Fill 1: 30 * $100 * 0.002 = $6
+    // Fill 2: 40 * $100 * 0.002 = $8
+    // Fill 3: 30 * $100 * 0.002 = $6
+    // Total: $20
     EXPECT_DOUBLE_EQ(engine_->get_total_fees(), 20.0);
     EXPECT_EQ(engine_->get_position(), 100.0);
 }

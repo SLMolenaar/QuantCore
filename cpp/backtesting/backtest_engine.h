@@ -139,6 +139,7 @@ public:
         equity_.clear();
         timestamps_.clear();
 
+        // Set up engine, market maker, and empty price history for each symbol
         for (const auto& [symbol, bars] : data_) {
             engines_[symbol] = std::make_shared<ExecutionEngine>(symbol);
             mms_[symbol] = std::make_shared<MarketMaker>(
