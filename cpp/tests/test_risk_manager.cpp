@@ -1,7 +1,5 @@
-/**
- * Tests for PositionSizer classes
- * Tests all position sizing methods with various market conditions.
- */
+/** tests for PositionSizer classes */
+
 
 #include <gtest/gtest.h>
 #include "backtesting/position_sizer.h"

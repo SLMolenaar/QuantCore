@@ -225,6 +225,7 @@ class FixedShares : public PositionSizer {
 public:
     FixedShares(double n_shares) : n_shares_(n_shares) {
         if (n_shares <= 0.0) throw std::invalid_argument("Number of shares must be positive");
+        max_leverage_ = 0.0;
     }
 
     double calculate_size(const PositionSizingContext& ctx) override {
