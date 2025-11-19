@@ -430,10 +430,16 @@ private:
             return;
         }
 
+        // Get latency from execution engine
+        int64_t latency = ee_it->second->get_latency_ns();
+
         auto ord = std::make_shared<OrderEvent>(
-            sig->get_symbol(), sig->get_timestamp(),
-            ord_side, OrderType::GoodTillCancel,
-            std::abs(delta), ord_px
+            sig->get_symbol(),
+            sig->get_timestamp() + latency,  // Order arrives after latency delay
+            ord_side,
+            OrderType::GoodTillCancel,
+            std::abs(delta),
+            ord_px
         );
         ord->set_order_id(next_oid_++);
         eq_.push(ord);

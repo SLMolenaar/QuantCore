@@ -148,6 +148,10 @@ public:
         return asks.empty() ? 0 : asks[0].price_;
     }
 
+    int64_t get_latency_ns() const {
+        return config_.latency_ns;
+    }
+
     // avg of best bid & ask
     std::optional<double> get_mid_price() const {
         Price bid = get_best_bid();
