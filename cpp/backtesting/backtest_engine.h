@@ -351,43 +351,82 @@ private:
 
     void handle_sig(EventPtr event) {
         auto sig = std::static_pointer_cast<SignalEvent>(event);
+
+        // validate prereqs
         auto px_it = last_px_.find(sig->get_symbol());
-        if (px_it == last_px_.end()) return;
+        if (px_it == last_px_.end()) {
+            return;
+        }
 
         double curr_px = px_it->second;
-        if (curr_px <= 0.0) return;
+        if (curr_px <= 0.0) {
+            return;
+        }
 
-        // Validate signal strength - warn if outside normal range but allow it
+        // val sig strength
         double strength = sig->get_strength();
         if (strength < 0.0) {
-            std::cerr << "WARNING: Negative signal strength (" << strength
-                      << ") from " << sig->get_strategy_id() << ", ignoring signal\n";
             return;
         }
         if (strength > 2.0) {
             std::cerr << "WARNING: Very high signal strength (" << strength
-                      << ") from " << sig->get_strategy_id()
-                      << ", this will create large positions\n";
+                      << ") from " << sig->get_strategy_id() << "\n";
         }
         if (strength < 0.01) {
-            return; // Signal too weak
+            return;
         }
 
         auto ee_it = engines_.find(sig->get_symbol());
-        if (ee_it == engines_.end()) return;
+        if (ee_it == engines_.end()) {
+            return;
+        }
 
         double curr_pos = ee_it->second->get_position();
 
-        // Calculate actual volatility from recent price data
-        double portfolio_vol = calculate_volatility(sig->get_symbol());
-        double stop_distance = default_stop_distance_;
+        // calc target position based on signal type
+        double target_pos = 0.0;
 
-        PositionSizingContext ctx(
-            strength, curr_cap_, curr_px,
-            curr_pos, portfolio_vol, stop_distance
-        );
-        double target = sizer_->calculate_size(ctx);
+        if (sig->get_signal_type() == SignalType::BUY) {
+            double portfolio_vol = calculate_volatility(sig->get_symbol());
+            double stop_distance = default_stop_distance_;
 
+            PositionSizingContext ctx(
+                strength, curr_cap_, curr_px,
+                0.0, portfolio_vol, stop_distance
+            );
+            target_pos = sizer_->calculate_size(ctx);
+
+        } else if (sig->get_signal_type() == SignalType::SELL) {
+            double portfolio_vol = calculate_volatility(sig->get_symbol());
+            double stop_distance = default_stop_distance_;
+
+            PositionSizingContext ctx(
+                strength, curr_cap_, curr_px,
+                0.0, portfolio_vol, stop_distance
+            );
+            target_pos = -sizer_->calculate_size(ctx);
+
+        } else if (sig->get_signal_type() == SignalType::HOLD) {
+            target_pos = 0.0;
+        } else {
+            return;
+        }
+
+        // calc order qtty (delta from current to target)
+        double delta = target_pos - curr_pos;
+
+        // must have meaningful position change
+        if (std::abs(delta) < 1.0) {
+            return;
+        }
+
+        // determine side and qtty
+        // If delta > 0, we need to buy (increase position)
+        // If delta < 0, we need to sell (decrease position)
+        Side ord_side = (delta > 0.0) ? Side::Buy : Side::Sell;
+        double ord_qty = std::abs(delta);
+
+        // calc order price with bid/ask spread
         double spread = mm_spread_;
         auto mm_it = mms_.find(sig->get_symbol());
         if (mm_it != mms_.end()) {
@@ -395,42 +434,28 @@ private:
         }
 
         double ord_px;
-        Side ord_side;
-        double delta;
-
-        if (sig->get_signal_type() == SignalType::BUY) {
-            // When buying, we need to pay the ask (market price + half spread)
-            // Place limit order at ask to ensure fill
+        if (ord_side == Side::Buy) {
+            // When buying, pay the ask (market price + half spread)
             ord_px = curr_px * (1.0 + spread / 2.0);
-            delta = target - curr_pos;
-            ord_side = Side::Buy;
-        } else if (sig->get_signal_type() == SignalType::SELL) {
-            // When selling, we hit the bid (market price - half spread)
-            // Place limit order at bid to ensure fill
-            ord_px = curr_px * (1.0 - spread / 2.0);
-            delta = curr_pos - target;
-            ord_side = Side::Sell;
         } else {
-            return;
+            // When selling, hit the bid (market price - half spread)
+            ord_px = curr_px * (1.0 - spread / 2.0);
         }
 
-        // Must have meaningful position change
-        if (std::abs(delta) < 1.0) return;
-
-        // Check risk limits before placing order
+        // pretrade risk check
         auto risk_check = risk_mgr_->check_order(
             sig->get_symbol(),
             ord_side,
-            std::abs(delta),
+            ord_qty,
             ord_px
         );
 
         if (!risk_check.is_approved()) {
-            // Risk check failed - don't place order
+            // Risk limit violation - silently reject order
             return;
         }
 
-        // Get latency from execution engine
+        // create & submit order
         int64_t latency = ee_it->second->get_latency_ns();
 
         auto ord = std::make_shared<OrderEvent>(
@@ -438,7 +463,7 @@ private:
             sig->get_timestamp() + latency,  // Order arrives after latency delay
             ord_side,
             OrderType::GoodTillCancel,
-            std::abs(delta),
+            ord_qty,
             ord_px
         );
         ord->set_order_id(next_oid_++);

@@ -12,10 +12,13 @@ namespace quantcore {
     // load ohlcv from csv
     class CSVDataLoader {
     public:
+
+        /* public interface for loading data */
         static BarSeries load(const std::string& filepath,
                               const std::string& symbol = "",
                               bool has_header = true,
                               double max_skip_pct = 0.20) { // fails if 20% of lines were skipped
+
             std::ifstream file(filepath);
             if (!file.is_open()) {
                 throw std::runtime_error("Could not open file: " + filepath);
@@ -24,7 +27,7 @@ namespace quantcore {
             BarSeries bars;
             std::string line;
             size_t line_nr = 0;
-            size_t skipped_lines = 0;
+            size_t bad_lines = 0;
 
             // Skip header
             if (has_header) {
@@ -32,6 +35,7 @@ namespace quantcore {
                 line_nr++;
             }
 
+            // main reading loop
             while (std::getline(file, line)) {
                 line_nr++;
                 if (line.empty()) continue;
@@ -42,24 +46,24 @@ namespace quantcore {
                 } catch (const std::exception& e) {
                     std::cerr << "WARNING: skipping line " << line_nr
                               << " in " << filepath << ": " << e.what() << "\n";
-                    skipped_lines++;
+                    bad_lines++;
                     continue;
                 }
             }
 
-            // Check if too many lines were skipped
-            double skip_pct = static_cast<double>(skipped_lines) / line_nr;
+            // Check if too many lines were skipped, if more than 20% of lines are bad the file is probably corrupted
+            double skip_pct = static_cast<double>(bad_lines) / line_nr;
             if (skip_pct > max_skip_pct) {
                 throw std::runtime_error(
-                    "Data quality error: " + std::to_string(skipped_lines) +
+                    "Data quality error: " + std::to_string(bad_lines) +
                     " out of " + std::to_string(line_nr) +
                     " lines skipped (" + std::to_string(skip_pct * 100) +
                     "%), exceeds threshold of " + std::to_string(max_skip_pct * 100) + "%"
                 );
             }
 
-            if (skipped_lines > 0) {
-                std::cerr << "INFO: Skipped " << skipped_lines
+            if (bad_lines > 0) {
+                std::cerr << "INFO: Skipped " << bad_lines
                           << " lines out of " << line_nr << " total lines ("
                           << (skip_pct * 100) << "%)\n";
             }
@@ -77,7 +81,7 @@ namespace quantcore {
             return bars;
         }
 
-    private:
+    private: // helper functions
         static BarData parse_line(const std::string& line, const std::string& default_symbol) {
             std::stringstream ss(line);
             std::string token;
