@@ -543,7 +543,7 @@ TEST_F(ExecutionEngineTest, GetBestBidAsk) {
 // PNL CONSISTENCY & EDGE CASES
 // ============================================================================
 
-TEST_F(ExecutionEngineTest, PnLConsistencyInvariantGoldenRule) {
+TEST_F(ExecutionEngineTest, PnLConsistencyInvariant) {
 
     // Trade 1: Buy 100 @ $100
     add_sell_liquidity(10000, 100);

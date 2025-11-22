@@ -1072,6 +1072,5 @@ TEST_F(BacktestEngineTest, PnLComponentsAddUpCorrectly) {
     double unrealized = exec->get_unrealized_pnl();
     double total = exec->get_total_pnl();
 
-    // GOLDEN RULE
     EXPECT_DOUBLE_EQ(total, realized + unrealized);
 }
