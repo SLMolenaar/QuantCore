@@ -1,17 +1,3 @@
-/**
- * QuantCore — Backtest Engine Benchmark
- *
- * Measures throughput and wall-clock time of the full event-driven loop:
- *   market data → strategy → signal → order → fill → equity update
- *
- * Build (Release):
- *   g++ -std=c++20 -O3 -DNDEBUG -I../cpp -I../cpp/orderbook \
- *       bench_backtest_engine.cpp -o bench_backtest_engine
- *
- * Run:
- *   ./bench_backtest_engine
- */
-
 #include <chrono>
 #include <cmath>
 #include <iomanip>
