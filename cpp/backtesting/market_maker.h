@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <random>
 #include <deque>
+#include <memory_resource>
 
 namespace quantcore {
 
@@ -73,6 +74,11 @@ private:
     std::vector<OrderId> active_orders_;
     mutable std::mt19937 rng_;
 
+    // Pool allocator for Order objects. When a shared_ptr is destroyed its memory
+    // returns to this pool's free list instead of back to malloc. The next
+    // place_orders() call pops from that free list.
+    std::pmr::unsynchronized_pool_resource order_pool_;
+
     void cancel_orders(ExecutionEngine& engine) {
         auto& ob = engine.get_orderbook();
         for (OrderId id : active_orders_) {
@@ -98,7 +104,10 @@ private:
             Price price_cents = static_cast<Price>(price * 100.0);
             Quantity quantity = calc_quantity(level, volume);
 
-            auto order = std::make_shared<Order>(
+            // Allocate Order from pool instead of global heap
+            std::pmr::polymorphic_allocator<Order> alloc{&order_pool_};
+            auto order = std::allocate_shared<Order>(
+                alloc,
                 OrderType::GoodTillCancel,
                 next_order_id_++,
                 side,
