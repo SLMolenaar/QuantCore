@@ -252,7 +252,7 @@ private:
                     symbol, bar.timestamp_ns, bar.open, bar.high,
                     bar.low, bar.close, bar.volume
                 );
-                eq_.push(event);
+                eq_.push(event); // add event to event queue
             }
         }
     }
