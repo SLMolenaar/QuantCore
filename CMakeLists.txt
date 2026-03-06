@@ -87,6 +87,30 @@ if(BUILD_TESTS)
     endif()
 endif()
 
+
+# Benchmarks
+option(BUILD_BENCHMARKS "Build performance benchmarks" ON)
+
+if(BUILD_BENCHMARKS)
+    add_executable(bench_backtest_engine
+        benchmarks/bench_backtest_engine.cpp
+    )
+
+    target_include_directories(bench_backtest_engine PRIVATE
+        ${PROJECT_SOURCE_DIR}/cpp
+        ${PROJECT_SOURCE_DIR}/cpp/orderbook
+    )
+
+    # benchmarks must be built in Release for meaningful numbers
+    target_compile_options(bench_backtest_engine PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/O2 /DNDEBUG>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O3 -DNDEBUG>
+    )
+
+    message(STATUS "Build benchmarks: ON")
+endif()
+
+
 # Print configuration
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
