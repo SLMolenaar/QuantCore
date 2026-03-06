@@ -48,6 +48,7 @@ Strategy = _core.Strategy
 BuyAndHold = _core.BuyAndHold
 SMACrossover = _core.SMACrossover
 MeanReversion = _core.MeanReversion
+PairsTrading = _core.PairsTrading
 
 # Backtest engine
 BacktestEngine = _core.BacktestEngine
@@ -150,59 +151,37 @@ def run_backtest(
 class BacktestResults:
     """Container for backtest results"""
 
-    def __init__(self, engine: BacktestEngine, initial_capital: float, strategy: Strategy):
-        self.engine = engine
-        self.initial_capital = initial_capital
-        self.strategy_name = strategy.get_name()
-        self.final_value = None
-        self.total_pnl = None
-        self.total_fees = None
-        self.execution_engines = {}
-
-    def compute(self):
-        """Compute results after backtest run"""
-        self.final_value = self.engine.run()
-        self.total_pnl = self.engine.get_total_pnl()
-        self.total_fees = self.engine.get_total_fees()
-        return self
-
-    @property
-    def return_pct(self) -> float:
-        """Return percentage"""
-        if self.final_value is None:
-            return 0.0
-        return ((self.final_value / self.initial_capital) - 1.0) * 100.0
+    def __init__(self, results: Dict):
+        self.strategy_name = results.get('strategy', 'Unknown')
+        self.initial_capital = results.get('initial_capital', 0.0)
+        self.final_value = results.get('final_value', 0.0)
+        self.total_pnl = results.get('total_pnl', 0.0)
+        self.total_fees = results.get('total_fees', 0.0)
+        self.return_pct = results.get('return_pct', 0.0)
+        self.equity_curve = results.get('equity_curve', [])
+        self.timestamps = results.get('timestamps', [])
+        self._metrics = None
 
     @property
     def net_pnl(self) -> float:
-        """Net PnL after fees"""
-        if self.total_pnl is None or self.total_fees is None:
-            return 0.0
-        return self.total_pnl - self.total_fees
+        return self.final_value - self.initial_capital
 
-    def get_position(self, symbol: str) -> float:
-        """Get final position for a symbol"""
-        ee = self.engine.get_execution_engine(symbol)
-        return ee.get_position() if ee else 0.0
+    def compute(self):
+        """Compute performance metrics"""
+        from .analytics import calculate_all_metrics, calculate_returns
+        import numpy as np
 
-    def __repr__(self) -> str:
-        if self.final_value is None:
-            return f"<BacktestResults (not computed)>"
-        return (
-            f"<BacktestResults\n"
-            f"  Strategy: {self.strategy_name}\n"
-            f"  Initial: ${self.initial_capital:,.2f}\n"
-            f"  Final: ${self.final_value:,.2f}\n"
-            f"  PnL: ${self.total_pnl:,.2f}\n"
-            f"  Fees: ${self.total_fees:,.2f}\n"
-            f"  Return: {self.return_pct:.2f}%>"
-        )
+        ec = np.array(self.equity_curve)
+        self._metrics = calculate_all_metrics(ec, risk_free_rate=0.0)
+        return self
 
-    def summary(self) -> str:
-        """Get formatted summary"""
-        if self.final_value is None:
-            return "Backtest not yet computed. Call .compute() first."
+    @property
+    def metrics(self):
+        if self._metrics is None:
+            raise RuntimeError("Call .compute() first.")
+        return self._metrics
 
+    def __str__(self) -> str:
         lines = [
             "=" * 60,
             f"  Backtest Results - {self.strategy_name}",
@@ -244,6 +223,7 @@ __all__ = [
     'BuyAndHold',
     'SMACrossover',
     'MeanReversion',
+    'PairsTrading',
     # Backtest
     'BacktestEngine',
     'BacktestResults',

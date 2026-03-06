@@ -122,15 +122,26 @@ def calculate_volatility(returns: np.ndarray, periods_per_year: int = 252) -> fl
     return np.std(returns) * np.sqrt(periods_per_year) * 100.0
 
 
-def calculate_sharpe_ratio(returns, risk_free_rate=0.0, periods_per_year=252):
+def calculate_sharpe_ratio(
+        returns: np.ndarray,
+        risk_free_rate: float = 0.0,
+        periods_per_year: int = 252
+) -> float:
+    """
+    Annualised Sharpe ratio.
+
+    risk_free_rate is the annual rate (e.g. 0.02 = 2%).
+    It is divided by periods_per_year before subtracting from each
+    per-period return so the units are consistent.
+    """
     if len(returns) == 0:
         return 0.0
 
-    excess_returns = returns - risk_free_rate
+    rf_per_period = risk_free_rate / periods_per_year
+    excess_returns = returns - rf_per_period
     mean_excess = np.mean(excess_returns)
     std_excess = np.std(excess_returns, ddof=1)
 
-    # Handle zero or near-zero volatility
     if std_excess < 1e-10:
         return 0.0
 
@@ -160,7 +171,7 @@ def calculate_sortino_ratio(
 
     downside_std = np.sqrt(np.mean(downside_returns ** 2))
 
-    if downside_std == 0:
+    if downside_std < 1e-10:
         return 0.0
 
     sortino = np.mean(excess_returns) / downside_std * np.sqrt(periods_per_year)
@@ -169,33 +180,27 @@ def calculate_sortino_ratio(
 
 def calculate_max_drawdown(equity_curve: np.ndarray) -> Tuple[float, int]:
     """
-    Maximum drawdown and its duration
+    Maximum drawdown and duration
 
-    Returns (max_drawdown_pct, duration_in_periods)
+    Returns:
+        (max_drawdown_pct, duration_in_periods)
     """
     if len(equity_curve) < 2:
         return 0.0, 0
 
     running_max = np.maximum.accumulate(equity_curve)
-    drawdown = (equity_curve - running_max) / running_max
+    drawdown = (equity_curve - running_max) / running_max * 100.0
 
-    max_dd = np.min(drawdown) * 100.0
+    max_dd = float(np.min(drawdown))
 
-    # find duration of maximum drawdown
-    max_dd_idx = np.argmin(drawdown)
+    # find duration of the worst drawdown
+    peak_idx = np.argmax(equity_curve[:np.argmin(drawdown) + 1])
+    trough_idx = np.argmin(drawdown)
 
-    # find peak before max drawdown
-    peak_idx = 0
-    for i in range(max_dd_idx, -1, -1):
-        if equity_curve[i] == running_max[max_dd_idx]:
-            peak_idx = i
-            break
-
-    # find when equity recovered (if it did)
-    recovery_idx = len(equity_curve)
-    peak_value = equity_curve[peak_idx]
-    for i in range(max_dd_idx + 1, len(equity_curve)):
-        if equity_curve[i] >= peak_value:
+    # look for recovery after trough
+    recovery_idx = trough_idx
+    for i in range(trough_idx, len(equity_curve)):
+        if equity_curve[i] >= equity_curve[peak_idx]:
             recovery_idx = i
             break
 
@@ -206,20 +211,20 @@ def calculate_max_drawdown(equity_curve: np.ndarray) -> Tuple[float, int]:
 
 def calculate_calmar_ratio(annualized_return: float, max_drawdown: float) -> float:
     """
-    Calmar ratio = annualized return / max drawdown
+    Calmar ratio: annualized return / abs(max drawdown)
     """
-    if max_drawdown >= 0:
-        return 0.0
-
-    if abs(max_drawdown) < 0.001:  # Avoid division by near-zero
+    if abs(max_drawdown) < 0.01:
         return 0.0
 
     return annualized_return / abs(max_drawdown)
 
 
-def analyze_trades(trade_pnls: List[float]) -> Dict[str, float]:
+def analyze_trades(trade_pnls: List[float]) -> dict:
     """
-    Analyze individual trade performance
+    Analyze individual trade results
+
+    Args:
+        trade_pnls: List of PnL per trade (positive = win, negative = loss)
     """
     if not trade_pnls:
         return {
@@ -232,24 +237,20 @@ def analyze_trades(trade_pnls: List[float]) -> Dict[str, float]:
             'largest_loss': 0.0,
         }
 
-    wins = [pnl for pnl in trade_pnls if pnl > 0]
-    losses = [pnl for pnl in trade_pnls if pnl < 0]
-
     total_trades = len(trade_pnls)
-    win_count = len(wins)
-    loss_count = len(losses)
+    wins   = [p for p in trade_pnls if p > 0]
+    losses = [p for p in trade_pnls if p <= 0]
 
-    win_rate = (win_count / total_trades * 100.0) if total_trades > 0 else 0.0
-
-    avg_win = np.mean(wins) if wins else 0.0
+    win_rate = (len(wins) / total_trades) * 100.0 if total_trades > 0 else 0.0
+    avg_win  = np.mean(wins)   if wins   else 0.0
     avg_loss = np.mean(losses) if losses else 0.0
 
-    total_wins = sum(wins) if wins else 0.0
-    total_losses = abs(sum(losses)) if losses else 0.0
+    total_wins   = sum(wins)         if wins   else 0.0
+    total_losses = abs(sum(losses))  if losses else 0.0
 
     profit_factor = (total_wins / total_losses) if total_losses > 0 else float('inf')
 
-    largest_win = max(wins) if wins else 0.0
+    largest_win  = max(wins)   if wins   else 0.0
     largest_loss = min(losses) if losses else 0.0
 
     return {
@@ -266,7 +267,7 @@ def analyze_trades(trade_pnls: List[float]) -> Dict[str, float]:
 def calculate_all_metrics(
         equity_curve: np.ndarray,
         trade_pnls: Optional[List[float]] = None,
-        risk_free_rate: float = 0.02,
+        risk_free_rate: float = 0.0,
         periods_per_year: int = 252
 ) -> PerformanceMetrics:
     """
@@ -275,15 +276,15 @@ def calculate_all_metrics(
     returns = calculate_returns(equity_curve)
 
     # return metrics
-    total_return = calculate_total_return(equity_curve)
+    total_return      = calculate_total_return(equity_curve)
     annualized_return = calculate_annualized_return(equity_curve, periods_per_year)
 
     # risk metrics
-    volatility = calculate_volatility(returns, periods_per_year)
-    sharpe = calculate_sharpe_ratio(returns, risk_free_rate, periods_per_year)
-    sortino = calculate_sortino_ratio(returns, risk_free_rate, periods_per_year)
-    max_dd, max_dd_duration = calculate_max_drawdown(equity_curve)
-    calmar = calculate_calmar_ratio(annualized_return, max_dd)
+    volatility           = calculate_volatility(returns, periods_per_year)
+    sharpe               = calculate_sharpe_ratio(returns, risk_free_rate, periods_per_year)
+    sortino              = calculate_sortino_ratio(returns, risk_free_rate, periods_per_year)
+    max_dd, max_dd_dur   = calculate_max_drawdown(equity_curve)
+    calmar               = calculate_calmar_ratio(annualized_return, max_dd)
 
     # trading metrics
     if trade_pnls is None:
@@ -306,7 +307,7 @@ def calculate_all_metrics(
         sortino_ratio=sortino,
         volatility=volatility,
         max_drawdown=max_dd,
-        max_drawdown_duration=max_dd_duration,
+        max_drawdown_duration=max_dd_dur,
         calmar_ratio=calmar,
         **trade_metrics
     )
@@ -375,7 +376,7 @@ def monthly_returns(equity_curve: np.ndarray, timestamps: np.ndarray) -> pd.Data
     df['returns'] = df['equity'].pct_change()
 
     # resample to monthly
-    monthly = df['returns'].resample('M').apply(lambda x: (1 + x).prod() - 1)
+    monthly = df['returns'].resample('ME').apply(lambda x: (1 + x).prod() - 1)
 
     # pivot to year x month table
     monthly_df = pd.DataFrame({
