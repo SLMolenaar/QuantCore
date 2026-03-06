@@ -13,7 +13,9 @@
 #include "portfolio_context.h"
 #include "../Execution.h"
 #include <memory>
-#include <map>
+#include <unordered_map>
+#include <memory_resource>
+#include <utility>
 #include <vector>
 #include <stdexcept>
 #include <deque>
@@ -216,11 +218,13 @@ public:
 private:
     EventQueue eq_;
     std::shared_ptr<Strategy> strat_;
-    std::map<std::string, BarSeries> data_;
-    std::map<std::string, std::shared_ptr<ExecutionEngine>> engines_;
-    std::map<std::string, std::shared_ptr<MarketMaker>> mms_;
-    std::map<std::string, double> last_px_;
-    std::map<std::string, std::deque<double>> price_history_;
+
+    // unordered_map: O(1) symbol lookups vs O(log n) for std::map
+    std::unordered_map<std::string, BarSeries> data_;
+    std::unordered_map<std::string, std::shared_ptr<ExecutionEngine>> engines_;
+    std::unordered_map<std::string, std::shared_ptr<MarketMaker>> mms_;
+    std::unordered_map<std::string, double> last_px_;
+    std::unordered_map<std::string, std::deque<double>> price_history_;
 
     double init_cap_;
     double curr_cap_;
@@ -242,13 +246,25 @@ private:
     size_t volatility_lookback_;
     size_t bars_per_year_;
 
+    // Pool allocator for events. Avoids repeated heap allocation/deallocation
+    // in the hot loop. Events are short-lived so the pool free-list is reused
+    // continuously throughout a run.
+    std::pmr::unsynchronized_pool_resource event_pool_;
+
     // Buffer size to avoid frequent reallocation of price history deque
     static constexpr size_t PRICE_HISTORY_BUFFER = 10;
+
+    // Allocate an event from the pool
+    template<typename T, typename... Args>
+    std::shared_ptr<T> make_event(Args&&... args) {
+        std::pmr::polymorphic_allocator<T> alloc{&event_pool_};
+        return std::allocate_shared<T>(alloc, std::forward<Args>(args)...);
+    }
 
     void load_data() {
         for (const auto& [symbol, bars] : data_) {
             for (const auto& bar : bars) {
-                auto event = std::make_shared<MarketDataEvent>(
+                auto event = make_event<MarketDataEvent>(
                     symbol, bar.timestamp_ns, bar.open, bar.high,
                     bar.low, bar.close, bar.volume
                 );
@@ -458,7 +474,7 @@ private:
         // create & submit order
         int64_t latency = ee_it->second->get_latency_ns();
 
-        auto ord = std::make_shared<OrderEvent>(
+        auto ord = make_event<OrderEvent>(
             sig->get_symbol(),
             sig->get_timestamp() + latency,  // Order arrives after latency delay
             ord_side,
@@ -494,7 +510,7 @@ private:
         auto trades = engine->execute_order(order);
 
         for (const auto& trade : trades) {
-            auto fill = std::make_shared<FillEvent>(
+            auto fill = make_event<FillEvent>(
                 ord->get_symbol(), ord->get_timestamp(),
                 ord->get_order_id(), ord->get_side(),
                 trade.GetBidTrade().quantity_, trade.GetBidTrade().price_ / 100.0, 0.0

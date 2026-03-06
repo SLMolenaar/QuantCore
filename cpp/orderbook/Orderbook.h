@@ -434,9 +434,8 @@ public:
 
     // add order to the ob and attempt to match
     // Returns empty Trades if val fails
+    // CheckAndResetDay() removed from hot path - GoodForDay cancellation handled externally
     Trades AddOrder(OrderPointer order) {
-        CheckAndResetDay(); // checkif we have to cancel GoodForDay orders
-
         // Handle market orders first (convert to lim orders)
         if (order->GetOrderType() == OrderType::Market) {
             if (order->GetSide() == Side::Buy && !asks_.empty()) {
@@ -510,9 +509,8 @@ public:
     }
 
     // modify existing order by canceling and re-adding
+    // CheckAndResetDay() removed from hot path - GoodForDay cancellation handled externally
     Trades MatchOrder(OrderModify order) {
-        CheckAndResetDay(); // Check if we have to cancel GoodForDay orders
-
         if (!orders_.contains(order.GetOrderId())) {
             return {}; // Order doesnt exist
         }
