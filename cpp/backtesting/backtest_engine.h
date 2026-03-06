@@ -141,11 +141,13 @@ public:
         equity_.clear();
         timestamps_.clear();
 
-        // Set up engine, market maker, and empty price history for each symbol
+        // Set up engine, market maker, and empty price history for each symbol.
+        // MarketMakers receive a pointer to order_pool_ which is declared first
+        // in this class and therefore destroyed last - after mms_ and engines_.
         for (const auto& [symbol, bars] : data_) {
             engines_[symbol] = std::make_shared<ExecutionEngine>(symbol);
             mms_[symbol] = std::make_shared<MarketMaker>(
-                mm_spread_, mm_levels_, mm_depth_
+                mm_spread_, mm_levels_, mm_depth_, &order_pool_
             );
             price_history_[symbol] = std::deque<double>();
         }
@@ -216,6 +218,11 @@ public:
     std::vector<int64_t> get_timestamps() const { return timestamps_; }
 
 private:
+    // order_pool_ MUST be declared first so it is destroyed last.
+    // mms_ and engines_ (which hold Orders allocated from this pool) are
+    // declared after, so they are destroyed before the pool is released.
+    std::pmr::unsynchronized_pool_resource order_pool_;
+
     EventQueue eq_;
     std::shared_ptr<Strategy> strat_;
 
@@ -246,7 +253,7 @@ private:
     size_t volatility_lookback_;
     size_t bars_per_year_;
 
-    // Pool allocator for events. Avoids repeated heap allocation/deallocation
+    // Pool allocator for events - avoids repeated heap allocation/deallocation
     // in the hot loop. Events are short-lived so the pool free-list is reused
     // continuously throughout a run.
     std::pmr::unsynchronized_pool_resource event_pool_;

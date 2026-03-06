@@ -14,10 +14,13 @@ namespace quantcore {
 // synthetic liquidity for backtesting, makes sure strategies have liquidity to trade against
 class MarketMaker {
 public:
+    // order_allocator: pool owned by BacktestEngine, outlives all orders placed here.
+    // Defaults to the global heap so MarketMaker can still be used standalone.
     MarketMaker(
         double base_spread_pct = 0.0001,
         int num_levels = 5,
-        Quantity base_depth = 10000
+        Quantity base_depth = 10000,
+        std::pmr::memory_resource* order_allocator = std::pmr::get_default_resource()
     )
         : base_spread_pct_(base_spread_pct)
         , current_spread_pct_(base_spread_pct)
@@ -25,6 +28,7 @@ public:
         , base_depth_(base_depth)
         , next_order_id_(10000000000000ULL)
         , rng_(std::random_device{}())
+        , order_allocator_(order_allocator)
     {
     }
 
@@ -74,10 +78,9 @@ private:
     std::vector<OrderId> active_orders_;
     mutable std::mt19937 rng_;
 
-    // Pool allocator for Order objects. When a shared_ptr is destroyed its memory
-    // returns to this pool's free list instead of back to malloc. The next
-    // place_orders() call pops from that free list.
-    std::pmr::unsynchronized_pool_resource order_pool_;
+    // Non-owning pointer to pool in BacktestEngine. Lifetime guaranteed by
+    // order_pool_ being declared first in BacktestEngine (destroyed last).
+    std::pmr::memory_resource* order_allocator_;
 
     void cancel_orders(ExecutionEngine& engine) {
         auto& ob = engine.get_orderbook();
@@ -104,8 +107,8 @@ private:
             Price price_cents = static_cast<Price>(price * 100.0);
             Quantity quantity = calc_quantity(level, volume);
 
-            // Allocate Order from pool instead of global heap
-            std::pmr::polymorphic_allocator<Order> alloc{&order_pool_};
+            // Allocate from BacktestEngine's pool - no malloc, just a free-list pop
+            std::pmr::polymorphic_allocator<Order> alloc{order_allocator_};
             auto order = std::allocate_shared<Order>(
                 alloc,
                 OrderType::GoodTillCancel,
