@@ -22,15 +22,9 @@
 
 class Orderbook {
 private:
-    // OrderPointers is now std::vector<OrderPointer> (see Types.h).
-    // location_ is an index into the vector at the order's price level.
-    // When an order is cancelled, the vector is erased at that index and
-    // all subsequent orders at the same level have their indices decremented.
-    // In practice each price level has 1 order (market maker), so the shift
-    // cost is always zero.
     struct OrderEntry {
         OrderPointer order_{nullptr};
-        size_t location_; // index into OrderPointers vector at this price level
+        OrderPointers::iterator location_;
     };
 
     std::map<Price, OrderPointers, std::greater<Price> > bids_;
@@ -195,7 +189,9 @@ private:
     }
 
     Trades MatchOrders() {
-        // No upfront reserve - see change 1 comment.
+        // No upfront reserve - the vast majority of AddOrder() calls (market maker
+        // quotes placed away from mid) produce zero trades. Reserving orders_.size()
+        // on every call was allocating ~25M times unnecessarily over a 1000yr run.
         Trades trades;
 
         while (true) {
@@ -208,16 +204,9 @@ private:
 
             std::vector<OrderId> filledOrders;
 
-            // Track how many orders we consume from the front of each level.
-            // Using indices instead of pop_front() avoids O(n) shifting per
-            // consumed order. We erase the consumed prefix in one shot after
-            // the inner loop, then fix up stored indices for remaining orders.
-            size_t bid_consumed = 0;
-            size_t ask_consumed = 0;
-
-            while (bid_consumed < bids.size() && ask_consumed < asks.size()) {
-                auto &bid = bids[bid_consumed];
-                auto &ask = asks[ask_consumed];
+            while (!bids.empty() && !asks.empty()) {
+                auto &bid = bids.front();
+                auto &ask = asks.front();
 
                 Quantity quantity = std::min(bid->GetRemainingQuantity(), ask->GetRemainingQuantity());
 
@@ -241,33 +230,16 @@ private:
 
                 if (bid->IsFilled()) {
                     filledOrders.push_back(bid->GetOrderId());
-                    bid_consumed++;
+                    bids.pop_front();
                 }
                 if (ask->IsFilled()) {
                     filledOrders.push_back(ask->GetOrderId());
-                    ask_consumed++;
+                    asks.pop_front();
                 }
             }
 
-            // Remove consumed orders from lookup map
             for (const auto &orderId: filledOrders) {
                 orders_.erase(orderId);
-            }
-
-            // Erase consumed prefix from bid level and fix up stored indices
-            if (bid_consumed > 0) {
-                bids.erase(bids.begin(), bids.begin() + bid_consumed);
-                for (size_t i = 0; i < bids.size(); ++i) {
-                    orders_.at(bids[i]->GetOrderId()).location_ = i;
-                }
-            }
-
-            // Erase consumed prefix from ask level and fix up stored indices
-            if (ask_consumed > 0) {
-                asks.erase(asks.begin(), asks.begin() + ask_consumed);
-                for (size_t i = 0; i < asks.size(); ++i) {
-                    orders_.at(asks[i]->GetOrderId()).location_ = i;
-                }
             }
 
             if (bids.empty()) bids_.erase(bidPrice);
@@ -332,8 +304,8 @@ private:
                 );
                 auto &orders = bids_[level.price];
                 orders.push_back(order);
-                size_t idx = orders.size() - 1;
-                orders_.insert({order->GetOrderId(), OrderEntry{order, idx}});
+                auto iterator = std::next(orders.begin(), orders.size() - 1);
+                orders_.insert({order->GetOrderId(), OrderEntry{order, iterator}});
             } catch (const std::invalid_argument &) { continue; }
         }
 
@@ -346,8 +318,8 @@ private:
                 );
                 auto &orders = asks_[level.price];
                 orders.push_back(order);
-                size_t idx = orders.size() - 1;
-                orders_.insert({order->GetOrderId(), OrderEntry{order, idx}});
+                auto iterator = std::next(orders.begin(), orders.size() - 1);
+                orders_.insert({order->GetOrderId(), OrderEntry{order, iterator}});
             } catch (const std::invalid_argument &) { continue; }
         }
 
@@ -361,13 +333,8 @@ public:
         : lastDayReset_(std::chrono::system_clock::now()) {
     }
 
-    void SetExchangeRules(const ExchangeRules &rules) {
-        exchangeRules_ = rules;
-    }
-
-    const ExchangeRules &GetExchangeRules() const {
-        return exchangeRules_;
-    }
+    void SetExchangeRules(const ExchangeRules &rules) { exchangeRules_ = rules; }
+    const ExchangeRules &GetExchangeRules() const { return exchangeRules_; }
 
     void SetDayResetTime(int hour, int minute = 59) {
         if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
@@ -400,45 +367,38 @@ public:
             return MatchFillOrKill(order);
         }
 
-        // push_back then store size-1 as index: O(1), no iterator scan needed.
-        // With std::list, std::next(orders.begin(), orders.size()-1) was O(n).
+        OrderPointers::iterator iterator;
+
         if (order->GetSide() == Side::Buy) {
             auto &orders = bids_[order->GetPrice()];
             orders.push_back(order);
-            size_t idx = orders.size() - 1;
-            orders_.insert({order->GetOrderId(), OrderEntry{order, idx}});
+            iterator = std::next(orders.begin(), orders.size() - 1);
         } else {
             auto &orders = asks_[order->GetPrice()];
             orders.push_back(order);
-            size_t idx = orders.size() - 1;
-            orders_.insert({order->GetOrderId(), OrderEntry{order, idx}});
+            iterator = std::next(orders.begin(), orders.size() - 1);
         }
 
+        orders_.insert({order->GetOrderId(), OrderEntry{order, iterator}});
         return MatchOrders();
     }
 
     void CancelOrder(OrderId orderId) {
-        auto it = orders_.find(orderId);
-        if (it == orders_.end()) return;
+        if (!orders_.contains(orderId)) return;
 
-        const auto &[order, idx] = it->second;
-        orders_.erase(it);
+        const auto &[order, orderIterator] = orders_.at(orderId);
+        orders_.erase(orderId);
 
-        auto &level = (order->GetSide() == Side::Sell)
-            ? asks_.at(order->GetPrice())
-            : bids_.at(order->GetPrice());
-
-        // Erase at index. Then fix up stored indices for all orders that
-        // shifted left. With 1 order per level (typical MM usage), this
-        // loop body never executes.
-        level.erase(level.begin() + idx);
-        for (size_t i = idx; i < level.size(); ++i) {
-            orders_.at(level[i]->GetOrderId()).location_ = i;
-        }
-
-        if (level.empty()) {
-            if (order->GetSide() == Side::Sell) asks_.erase(order->GetPrice());
-            else bids_.erase(order->GetPrice());
+        if (order->GetSide() == Side::Sell) {
+            auto price = order->GetPrice();
+            auto &orders = asks_.at(price);
+            orders.erase(orderIterator);
+            if (orders.empty()) asks_.erase(price);
+        } else {
+            auto price = order->GetPrice();
+            auto &orders = bids_.at(price);
+            orders.erase(orderIterator);
+            if (orders.empty()) bids_.erase(price);
         }
     }
 
@@ -481,7 +441,7 @@ public:
         try {
             std::visit([this](auto &&msg) {
                 using T = std::decay_t<decltype(msg)>;
-                if constexpr (std::is_same_v<T, NewOrderMessage>)        ProcessNewOrder(msg);
+                if constexpr (std::is_same_v<T, NewOrderMessage>)         ProcessNewOrder(msg);
                 else if constexpr (std::is_same_v<T, CancelOrderMessage>) ProcessCancel(msg);
                 else if constexpr (std::is_same_v<T, ModifyOrderMessage>) ProcessModify(msg);
                 else if constexpr (std::is_same_v<T, TradeMessage>)       ProcessTrade(msg);
