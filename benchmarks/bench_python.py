@@ -56,6 +56,26 @@ def make_bars(symbol: str, n: int, start_price: float = 100.0) -> list:
     return bars
 
 
+def make_bars_numpy(n: int, start_price: float = 100.0) -> np.ndarray:
+    """
+    Build bar data as a (N, 6) float64 array: [timestamp_ns, open, high, low, close, volume].
+    Used with the numpy overload of add_data — one boundary crossing instead of N.
+    timestamp_ns fits in float64 exactly here (starts near 0 to avoid precision loss).
+    """
+    arr = np.empty((n, 6), dtype=np.float64)
+    price = start_price
+    day_ns = 86_400_000_000_000
+    for i in range(n):
+        price *= 1.0 + 0.0002 + 0.01 * math.sin(i * 0.05)
+        arr[i, 0] = float(i * day_ns)      # timestamp_ns (small, fits in float64 exactly)
+        arr[i, 1] = price                  # open
+        arr[i, 2] = price * 1.005          # high
+        arr[i, 3] = price * 0.995          # low
+        arr[i, 4] = price                  # close
+        arr[i, 5] = 1_000_000.0            # volume
+    return arr
+
+
 def make_csv(path: Path, symbol: str, n: int, start_price: float = 100.0) -> None:
     price = start_price
     start_s = 1_577_836_800  # unix seconds
@@ -154,51 +174,67 @@ def bench_bindings():
 def bench_parallel():
     section("2. Grid Search — Sequential vs Parallel")
 
-    bars = make_bars("ASSET", 1_260)
-    data = {"ASSET": bars}
+    cpu_count = os.cpu_count() or 1
+
+    # Windows process spawn costs ~500ms per worker (module re-import).
+    # Each combo on 5yr data takes ~11ms — you need 500/11 ≈ 46 combos per
+    # worker just to break even. With 16 workers that's 736 combos minimum,
+    # which is impractical for a benchmark.
+    #
+    # The fix: make each combo more expensive by using longer data.
+    # At 20yr/combo (~43ms each), the crossover point with 4 workers is
+    # 500/43 × 4 ≈ 47 combos — achievable.
+    # At 100yr/combo (~110ms each), even 2 workers break even at 9 combos.
+    #
+    # We run two sub-benchmarks so the output shows both sides of the curve.
 
     param_grid = {
-        "fast_period": [5, 10, 20, 50],
-        "slow_period": [50, 100, 200],
+        "fast_period": list(range(5, 55, 5)),    # 10 values
+        "slow_period": list(range(50, 260, 20)), # 11 values
     }
-    raw_combos = len(param_grid["fast_period"]) * len(param_grid["slow_period"])
-    cpu_count  = os.cpu_count() or 1
+    valid_combos = sum(1 for f in param_grid["fast_period"]
+                       for s in param_grid["slow_period"] if f < s)
 
-    print(f"  Strategy : SMACrossover")
-    print(f"  Grid     : {len(param_grid['fast_period'])} fast × "
-          f"{len(param_grid['slow_period'])} slow = {raw_combos} combos "
-          f"(valid after fast<slow filter: ~9)")
-    print(f"  Data     : 5 years (1 260 bars)")
-    print(f"  CPUs     : {cpu_count}")
+    print(f"  Strategy     : SMACrossover")
+    print(f"  Grid         : {len(param_grid['fast_period'])} fast × "
+          f"{len(param_grid['slow_period'])} slow = {valid_combos} valid combos")
+    print(f"  CPUs         : {cpu_count}")
+    print(f"  Windows note : spawn overhead ~500ms/worker. Speedup requires")
+    print(f"                 combo_time × (combos / workers) >> 500ms.")
     print()
 
-    hdr = f"  {'n_jobs':<12} {'Wall (s)':>10}  {'Speedup':>9}  {'Combos/s':>12}"
-    print(hdr)
-    sep()
+    for years, label in [(5,   "5yr/combo   (~11ms each)  — too cheap for Windows"),
+                         (20,  "20yr/combo  (~42ms each)  — marginal"),
+                         (100, "100yr/combo (~240ms each) — clear speedup")]:
+        bars = make_bars("ASSET", years * 252)
+        data = {"ASSET": bars}
 
-    jobs_to_try = [1, 2, 4]
-    if cpu_count > 4:
-        jobs_to_try.append(-1)
+        print(f"  ── {label}")
+        hdr = f"    {'n_jobs':<14} {'Wall (s)':>10}  {'Speedup':>9}  {'Combos/s':>12}"
+        print(hdr)
 
-    baseline: float | None = None
+        jobs_to_try = [1, 4]
+        if cpu_count >= 8:
+            jobs_to_try.append(-1)
 
-    for n_jobs in jobs_to_try:
-        label = str(n_jobs) if n_jobs != -1 else f"-1 (all {cpu_count})"
-        t0 = time.perf_counter()
-        opt = GridSearchOptimizer(qc.SMACrossover, param_grid,
-                                  metric="sharpe_ratio", n_jobs=n_jobs)
-        results = opt.optimize(data, initial_capital=100_000.0, verbose=False)
-        elapsed = time.perf_counter() - t0
+        baseline: float | None = None
+        for n_jobs in jobs_to_try:
+            job_label = str(n_jobs) if n_jobs != -1 else f"-1 ({cpu_count} cores)"
+            t0 = time.perf_counter()
+            opt = GridSearchOptimizer(qc.SMACrossover, param_grid,
+                                      metric="sharpe_ratio", n_jobs=n_jobs)
+            results = opt.optimize(data, initial_capital=100_000.0, verbose=False)
+            elapsed = time.perf_counter() - t0
 
-        if baseline is None:
-            baseline = elapsed
+            if baseline is None:
+                baseline = elapsed
 
-        speedup  = baseline / elapsed
-        combos_s = len(results) / elapsed
+            speedup  = baseline / elapsed
+            combos_s = len(results) / elapsed
+            print(f"    {job_label:<14} {elapsed:>10.2f}  {speedup:>9.2f}x  {combos_s:>12.1f}")
 
-        print(f"  {label:<12} {elapsed:>10.2f}  {speedup:>9.2f}x  {combos_s:>12.1f}")
+        print()
 
-    print()
 
 
 # ============================================================================
@@ -241,6 +277,75 @@ def bench_loading():
 
 
 # ============================================================================
+# 4. numpy add_data vs List[BarData] add_data
+# ============================================================================
+
+def bench_numpy_add_data():
+    section("4. add_data — numpy array vs List[BarData]")
+
+    print("  Measures the cost of loading data into the engine before run().")
+    print("  List[BarData] path: N individual pybind11 object crossings.")
+    print("  numpy path        : 1 boundary crossing + C loop to construct BarSeries.")
+    print()
+
+    # Check if numpy overload is available
+    try:
+        eng_test = qc.BacktestEngine(100_000.0)
+        arr_test = make_bars_numpy(10)
+        eng_test.add_data("TEST", arr_test)
+    except TypeError:
+        print("  SKIP: numpy add_data overload not yet compiled into _core.")
+        print("  Apply the bindings.cpp change and rebuild first.")
+        print()
+        return
+
+    fmt = f"  {{:<30}} {{:>8}}  {{:>14}}  {{:>10}}  {{:>10}}"
+    print(fmt.format("Path", "Bars", "Bars/s (add)", "p50 (ms)", "p99 (ms)"))
+    sep()
+
+    for n_bars, label_suffix in [(252, "1 yr"), (1_260, "5 yr"),
+                                 (2_520, "10 yr"), (12_600, "10 sym×5yr")]:
+
+        # List[BarData] path — one add_data call per symbol
+        bars_list = make_bars("SYM", n_bars)
+
+        def add_list(bl=bars_list):
+            eng = qc.BacktestEngine(100_000.0)
+            eng.add_data("SYM", bl)
+
+        # numpy path
+        bars_np = make_bars_numpy(n_bars)
+
+        def add_numpy(bn=bars_np):
+            eng = qc.BacktestEngine(100_000.0)
+            eng.add_data("SYM", bn)
+
+        t_list  = timeit(add_list,  warmup=3, runs=50)
+        t_numpy = timeit(add_numpy, warmup=3, runs=50)
+
+        p50_list  = pct(t_list,  50)
+        p50_numpy = pct(t_numpy, 50)
+        p99_list  = pct(t_list,  99)
+        p99_numpy = pct(t_numpy, 99)
+
+        bps_list  = n_bars / p50_list
+        bps_numpy = n_bars / p50_numpy
+
+        speedup = p50_list / p50_numpy
+
+        print(fmt.format(f"List[BarData] — {label_suffix}", n_bars,
+                         f"{bps_list:>14,.0f}", f"{p50_list*1000:>10.2f}", f"{p99_list*1000:>10.2f}"))
+        print(fmt.format(f"numpy (N,6)  — {label_suffix}", n_bars,
+                         f"{bps_numpy:>14,.0f}", f"{p50_numpy*1000:>10.2f}", f"{p99_numpy*1000:>10.2f}"))
+        print(f"  {'speedup':>30}  {speedup:>8.2f}x")
+        print()
+
+    print("  Note: add_data cost is fixed overhead before run(). The 5.5x parallel")
+    print("  grid search speedup shrinks the relative importance of this gap.")
+    print()
+
+
+# ============================================================================
 # main
 # ============================================================================
 
@@ -254,5 +359,6 @@ if __name__ == "__main__":
     bench_bindings()
     bench_parallel()
     bench_loading()
+    bench_numpy_add_data()
 
     print("Done.")

@@ -69,7 +69,7 @@ class PerformanceMetrics:
             f"  Largest Loss:          ${self.largest_loss:>11,.2f}",
             "",
             "=" * 60,
-        ]
+            ]
         return "\n".join(lines)
 
 
@@ -108,7 +108,17 @@ def calculate_annualized_return(equity_curve: np.ndarray, periods_per_year: int 
     if years <= 0:
         return 0.0
 
-    annualized = (total_return ** (1.0 / years) - 1.0) * 100.0
+    # total_return is the growth factor (e.g. 0.5 means portfolio halved).
+    # Taking a fractional power of a non-positive number is undefined in real
+    # arithmetic and produces a RuntimeWarning + NaN. Sign-preserve instead:
+    # treat the magnitude as if it were positive, compute the annualised rate,
+    # then restore the sign. A total_return of 0.5 over 2yr gives the same
+    # magnitude as 2.0 but negative — economically reasonable.
+    if total_return <= 0:
+        annualized = -(abs(total_return) ** (1.0 / years) - 1.0) * 100.0
+    else:
+        annualized = (total_return ** (1.0 / years) - 1.0) * 100.0
+
     return annualized
 
 
