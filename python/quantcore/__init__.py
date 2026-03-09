@@ -73,6 +73,33 @@ version = _core.version
 # for pre-trade sizing calculations. They are distinct from the C++ PositionSizer
 # hierarchy that BacktestEngine uses internally.
 from .position_sizing import PositionCalculator, PortfolioPositionSizer
+from .parquet_loader import ParquetDataLoader
+
+def load_parquet_data(
+        filepath: str,
+        symbol: str = "",
+        use_numpy: bool = True,
+) -> List[BarData]:
+    """
+    Load OHLCV data from a Parquet file.
+
+    Accepts any column naming convention that resolves to
+    timestamp, open, high, low, close, volume. Timestamps may be
+    datetime64 or integer (seconds, milliseconds, microseconds, nanoseconds).
+
+    Args:
+        filepath:  Path to the .parquet file.
+        symbol:    Symbol name to assign when the file has no 'symbol' column.
+        use_numpy: When True (default), reads via the fast numpy path and
+                   returns a numpy (N, 6) array suitable for
+                   BacktestEngine.add_data(symbol, array).
+                   When False, returns List[BarData] (same as load_csv_data).
+
+    Requires: pyarrow  (pip install pyarrow)
+    """
+    if use_numpy:
+        return ParquetDataLoader.load_numpy(filepath, symbol)
+    return ParquetDataLoader.load(filepath, symbol)
 
 
 def load_csv_data(filepath: str, symbol: str = "", has_header: bool = True) -> List[BarData]:
@@ -211,4 +238,5 @@ __all__ = [
     'PortfolioContext',
     # Utilities
     'hello', 'version',
+    'ParquetDataLoader', 'load_parquet_data',
 ]

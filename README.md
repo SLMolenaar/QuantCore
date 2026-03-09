@@ -52,7 +52,7 @@ plot_full_tearsheet(equity, returns)
 ## Architecture
 Every action goes through the event queue. When a strategy calls `generate_signal`, that signal becomes an `OrderEvent`, which goes through the order book, produces a `FillEvent`, which updates the portfolio. All in timestamp order. This is what prevents look-ahead bias: the strategy never sees data from the future.
 
-![img.png](img.png)
+![img.png](flowchart.png)
 
 ---
 
