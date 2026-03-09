@@ -207,7 +207,7 @@ __all__ = [
     'PositionCalculator', 'PortfolioPositionSizer',
     # Risk management
     'RiskCheckResult', 'RiskCheckResponse', 'RiskLimits', 'RiskManager',
-    # Portfolio context
+    # Portfolio context (FIX #6: was missing)
     'PortfolioContext',
     # Utilities
     'hello', 'version',

@@ -27,13 +27,14 @@ namespace quantcore {
             BarSeries bars;
             std::string line;
             size_t line_nr = 0;      // Total lines read (including header)
-            size_t data_lines = 0;
+            size_t data_lines = 0;   // Count only data lines, not header
             size_t bad_lines = 0;
 
             // Skip header
             if (has_header) {
                 std::getline(file, line);
                 line_nr++;
+                // Note: do NOT increment data_lines for header
             }
 
             // main reading loop
@@ -41,7 +42,7 @@ namespace quantcore {
                 line_nr++;
                 if (line.empty()) continue;
 
-                data_lines++;
+                data_lines++;  // Count this as a data line
 
                 try {
                     auto bar = parse_line(line, symbol);
@@ -55,7 +56,6 @@ namespace quantcore {
             }
 
             // Check if too many lines were skipped, if more than 20% of lines are bad the file is probably corrupted
-
             double skip_pct = (data_lines > 0)
                 ? static_cast<double>(bad_lines) / data_lines
                 : 0.0;

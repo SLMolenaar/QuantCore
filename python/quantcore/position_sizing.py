@@ -36,12 +36,20 @@ class PositionCalculator:
             capital:          Total capital available.
             max_position_pct: Hard cap on any single position as a fraction of capital.
         """
+        if capital <= 0:
+            raise ValueError("Capital must be positive")
         self.capital          = capital
         self.max_position_pct = max_position_pct
 
     def update_capital(self, new_capital: float) -> None:
         """Refresh the capital figure used for sizing calculations."""
+        if new_capital <= 0:
+            raise ValueError("Capital must be positive")
         self.capital = new_capital
+
+    def _validate_price(self, price: float) -> None:
+        if price <= 0:
+            raise ValueError("Price must be positive")
 
     def fixed_percentage(
             self,
@@ -50,6 +58,8 @@ class PositionCalculator:
             min_quantity: int   = 1,
     ) -> PositionSizeResult:
         """Allocate a fixed fraction of capital to the position."""
+        self._validate_price(price)
+
         percentage    = min(percentage, self.max_position_pct)
         notional      = self.capital * percentage
         quantity      = max(notional / price, min_quantity)
@@ -73,6 +83,9 @@ class PositionCalculator:
         Size a position so that hitting the stop loss costs exactly
         `risk_per_trade * capital`.
         """
+        self._validate_price(price)
+        if stop_loss_price <= 0:
+            raise ValueError("Stop loss price must be positive")
         if price == stop_loss_price:
             raise ValueError("Entry price cannot equal stop-loss price")
 
@@ -111,6 +124,7 @@ class PositionCalculator:
         A fractional Kelly (default 0.25) is recommended in practice to
         reduce variance while preserving most of the growth benefit.
         """
+        self._validate_price(price)
         if avg_loss == 0:
             raise ValueError("Average loss cannot be zero")
         if not 0 <= win_rate <= 1:
@@ -138,6 +152,7 @@ class PositionCalculator:
             min_quantity:  int = 1,
     ) -> PositionSizeResult:
         """Divide capital equally among `num_positions` positions."""
+        self._validate_price(price)
         if num_positions <= 0:
             raise ValueError("Number of positions must be positive")
 
@@ -165,6 +180,7 @@ class PositionCalculator:
         Scale the allocation inversely with realised volatility so that
         each position contributes approximately equal risk.
         """
+        self._validate_price(price)
         if volatility <= 0:
             raise ValueError("Volatility must be positive")
 
@@ -192,6 +208,7 @@ class PositionCalculator:
             min_quantity:    int   = 1,
     ) -> PositionSizeResult:
         """Apply leverage to a base allocation."""
+        self._validate_price(price)
         if leverage <= 0:
             raise ValueError("Leverage must be positive")
 
@@ -224,6 +241,8 @@ class PortfolioPositionSizer:
             max_total_exposure:   float = 1.0,
             max_single_position:  float = 0.2,
     ):
+        if capital <= 0:
+            raise ValueError("Capital must be positive")
         self.capital             = capital
         self.max_total_exposure  = max_total_exposure
         self.max_single_position = max_single_position
@@ -272,6 +291,9 @@ class PortfolioPositionSizer:
 
         Returns None if no additional exposure is available.
         """
+        if price <= 0:
+            raise ValueError("Price must be positive")
+
         available    = self.get_available_capital()
         if available <= 0:
             return None

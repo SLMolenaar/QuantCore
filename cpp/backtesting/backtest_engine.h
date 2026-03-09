@@ -41,6 +41,7 @@ public:
         , default_stop_distance_(0.05)
         , volatility_lookback_(20)
         , bars_per_year_(252)
+        , first_bar_timestamp_(0)
     {
         if (initial_capital <= 0.0) {
             throw std::invalid_argument("Initial capital must be positive");
@@ -118,6 +119,16 @@ public:
         equity_.clear();
         timestamps_.clear();
 
+        first_bar_timestamp_ = std::numeric_limits<int64_t>::max();
+        for (const auto& [symbol, bars] : data_) {
+            if (!bars.empty() && bars.front().timestamp_ns < first_bar_timestamp_) {
+                first_bar_timestamp_ = bars.front().timestamp_ns;
+            }
+        }
+        if (first_bar_timestamp_ == std::numeric_limits<int64_t>::max()) {
+            first_bar_timestamp_ = 0;  // Fallback if no data
+        }
+
         for (const auto& [symbol, bars] : data_) {
             engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol);
             mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
@@ -127,7 +138,7 @@ public:
         load_data();
 
         equity_.push_back(init_cap_);
-        timestamps_.push_back(0);
+        timestamps_.push_back(first_bar_timestamp_);
 
         while (!eq_.empty()) {
             auto event = eq_.pop();
@@ -174,8 +185,6 @@ public:
     std::vector<int64_t> get_timestamps()   const { return timestamps_; }
 
 private:
-    // order_pool_ must be declared first: it outlives mms_ and engines_,
-    // which hold orders allocated from this pool.
     std::pmr::unsynchronized_pool_resource order_pool_;
     std::pmr::unsynchronized_pool_resource event_pool_;
 
@@ -209,6 +218,8 @@ private:
     size_t volatility_lookback_;
     size_t bars_per_year_;
 
+    int64_t first_bar_timestamp_;
+
     static constexpr size_t PRICE_HISTORY_BUFFER = 10;
 
     template<typename T, typename... Args>
@@ -237,8 +248,6 @@ private:
             portfolio_->update_position(symbol, engine->get_position());
         }
 
-        // curr_cap_ tracks total portfolio value so that position sizing
-        // in handle_sig always reflects the current account equity.
         double total_equity = init_cap_ + get_total_pnl();
         curr_cap_ = total_equity;  // For position sizing calculations
 
@@ -337,15 +346,19 @@ private:
         double target_pos = 0.0;
 
         if (sig->get_signal_type() == SignalType::BUY) {
+            // Pass actual current_position instead of hardcoded 0.0
+            // This allows position sizers to make informed decisions based on existing holdings.
             PositionSizingContext ctx(
                 strength, portfolio_val, curr_px,
-                0.0, portfolio_vol, default_stop_distance_
+                curr_pos,
+                portfolio_vol, default_stop_distance_
             );
             target_pos = sizer_->calculate_size(ctx);
         } else if (sig->get_signal_type() == SignalType::SELL) {
             PositionSizingContext ctx(
                 strength, portfolio_val, curr_px,
-                0.0, portfolio_vol, default_stop_distance_
+                curr_pos,
+                portfolio_vol, default_stop_distance_
             );
             target_pos = -sizer_->calculate_size(ctx);
         } else {
@@ -403,6 +416,8 @@ private:
 
         auto trades = engine->execute_order(order);
         for (const auto& trade : trades) {
+            // For a BUY order, we are the bid side
+            // For a SELL order, we are the ask side
             const TradeInfo& our_trade = (ord->get_side() == Side::Buy)
                 ? trade.GetBidTrade()
                 : trade.GetAskTrade();

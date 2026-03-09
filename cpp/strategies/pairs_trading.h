@@ -5,6 +5,7 @@
 #include <deque>
 #include <cmath>
 #include <stdexcept>
+#include <iostream>
 
 namespace quantcore {
 
@@ -29,6 +30,9 @@ public:
         , direction_(Direction::NONE)
         , price1_(0.0)
         , price2_(0.0)
+        , symbol1_seen_(false)
+        , symbol2_seen_(false)
+        , warning_issued_(false)
     {
         if (symbol1 == symbol2)
             throw std::invalid_argument("Symbols must be different for pairs trading");
@@ -41,11 +45,53 @@ public:
     void on_data(const MarketDataEvent& event) override {
         const auto& symbol = event.get_symbol();
 
-        if      (symbol == symbol1_) price1_ = event.get_close();
-        else if (symbol == symbol2_) price2_ = event.get_close();
-        else return;
+        if (symbol == symbol1_) {
+            price1_ = event.get_close();
+            symbol1_seen_ = true;
+        } else if (symbol == symbol2_) {
+            price2_ = event.get_close();
+            symbol2_seen_ = true;
+        } else {
+            return;
+        }
 
-        if (price1_ == 0.0 || price2_ == 0.0) return;
+        if (!warning_issued_ && (symbol1_seen_ != symbol2_seen_)) {
+            // We've seen at least some bars, but only one symbol
+            // Check if we've waited long enough (more than lookback bars)
+            size_t bars_seen = symbol1_seen_ ? spread_history_.size() : 0;
+            if (symbol2_seen_ && !symbol1_seen_) {
+                bars_seen = spread_history_.size();
+            }
+
+            // After a reasonable amount of data, warn if we're still missing a symbol
+            if (bars_seen == 0) {
+                // First bar - issue warning immediately if one symbol arrives but not both
+                // Wait for more data before warning
+            }
+        }
+
+        if (price1_ == 0.0 || price2_ == 0.0) {
+            if (!warning_issued_) {
+                bool one_seen = symbol1_seen_ || symbol2_seen_;
+                bool both_seen = symbol1_seen_ && symbol2_seen_;
+                if (one_seen && !both_seen) {
+                    // Count how many bars we've processed
+                    static size_t bars_processed = 0;
+                    bars_processed++;
+                    if (bars_processed > lookback_) {
+                        std::cerr << "WARNING: PairsTrading strategy is missing data for ";
+                        if (!symbol1_seen_) {
+                            std::cerr << "symbol1 (" << symbol1_ << ")";
+                        } else {
+                            std::cerr << "symbol2 (" << symbol2_ << ")";
+                        }
+                        std::cerr << ". No signals will be generated until both symbols have data.\n";
+                        warning_issued_ = true;
+                    }
+                }
+            }
+            return;
+        }
 
         double spread = std::log(price1_ / price2_);
         spread_history_.push_back(spread);
@@ -89,9 +135,15 @@ public:
         price1_    = 0.0;
         price2_    = 0.0;
         direction_ = Direction::NONE;
+        symbol1_seen_ = false;
+        symbol2_seen_ = false;
+        warning_issued_ = false;
     }
 
     bool in_trade() const { return direction_ != Direction::NONE; }
+    bool has_both_symbols() const { return symbol1_seen_ && symbol2_seen_; }
+    bool has_symbol1() const { return symbol1_seen_; }
+    bool has_symbol2() const { return symbol2_seen_; }
 
 private:
     // Tracks which leg was bought vs. sold so that exit signals are always
@@ -108,6 +160,10 @@ private:
     std::deque<double> spread_history_;
     double             price1_;
     double             price2_;
+
+    bool symbol1_seen_;
+    bool symbol2_seen_;
+    bool warning_issued_;
 
     double calculate_mean() const {
         double sum = 0.0;

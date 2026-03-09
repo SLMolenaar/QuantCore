@@ -13,6 +13,9 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 
 
+MAX_RATIO_VALUE = 99.99
+
+
 @dataclass
 class PerformanceMetrics:
     """Container for backtest metrics"""
@@ -153,10 +156,14 @@ def calculate_sharpe_ratio(
     std_excess = np.std(excess_returns, ddof=1)
 
     if std_excess < 1e-10:
+        if mean_excess > 0:
+            return MAX_RATIO_VALUE
+        elif mean_excess < 0:
+            return -MAX_RATIO_VALUE
         return 0.0
 
     sharpe = mean_excess / std_excess * np.sqrt(periods_per_year)
-    return sharpe
+    return float(np.clip(sharpe, -MAX_RATIO_VALUE, MAX_RATIO_VALUE))
 
 
 def calculate_sortino_ratio(
@@ -177,15 +184,21 @@ def calculate_sortino_ratio(
     downside_returns = excess_returns[excess_returns < 0]
 
     if len(downside_returns) == 0:
-        return float('inf') if np.mean(excess_returns) > 0 else 0.0
+        if np.mean(excess_returns) > 0:
+            return MAX_RATIO_VALUE
+        return 0.0
 
     downside_std = np.sqrt(np.mean(downside_returns ** 2))
 
     if downside_std < 1e-10:
+        if np.mean(excess_returns) > 0:
+            return MAX_RATIO_VALUE
+        elif np.mean(excess_returns) < 0:
+            return -MAX_RATIO_VALUE
         return 0.0
 
     sortino = np.mean(excess_returns) / downside_std * np.sqrt(periods_per_year)
-    return sortino
+    return float(np.clip(sortino, -MAX_RATIO_VALUE, MAX_RATIO_VALUE))
 
 
 def calculate_max_drawdown(equity_curve: np.ndarray) -> Tuple[float, int]:
@@ -224,9 +237,14 @@ def calculate_calmar_ratio(annualized_return: float, max_drawdown: float) -> flo
     Calmar ratio: annualized return / abs(max drawdown)
     """
     if abs(max_drawdown) < 0.01:
+        if annualized_return > 0:
+            return MAX_RATIO_VALUE
+        elif annualized_return < 0:
+            return -MAX_RATIO_VALUE
         return 0.0
 
-    return annualized_return / abs(max_drawdown)
+    calmar = annualized_return / abs(max_drawdown)
+    return float(np.clip(calmar, -MAX_RATIO_VALUE, MAX_RATIO_VALUE))
 
 
 def analyze_trades(trade_pnls: List[float]) -> dict:
@@ -258,7 +276,10 @@ def analyze_trades(trade_pnls: List[float]) -> dict:
     total_wins   = sum(wins)         if wins   else 0.0
     total_losses = abs(sum(losses))  if losses else 0.0
 
-    profit_factor = (total_wins / total_losses) if total_losses > 0 else float('inf')
+    if total_losses > 0:
+        profit_factor = min(total_wins / total_losses, MAX_RATIO_VALUE)
+    else:
+        profit_factor = MAX_RATIO_VALUE if total_wins > 0 else 0.0
 
     largest_win  = max(wins)   if wins   else 0.0
     largest_loss = min(losses) if losses else 0.0
@@ -334,14 +355,46 @@ def rolling_sharpe(
     if len(returns) < window:
         return np.array([])
 
-    rolling_sharpes = []
+    n = len(returns)
+    result = np.empty(n - window + 1)
 
-    for i in range(window, len(returns) + 1):
-        window_returns = returns[i - window:i]
-        sharpe = calculate_sharpe_ratio(window_returns, 0.0, periods_per_year)
-        rolling_sharpes.append(sharpe)
+    # Initialize first window
+    window_returns = returns[:window]
+    running_sum = np.sum(window_returns)
+    running_sq_sum = np.sum(window_returns ** 2)
 
-    return np.array(rolling_sharpes)
+    annualization = np.sqrt(periods_per_year)
+
+    for i in range(n - window + 1):
+        if i > 0:
+            # Slide window: remove old value, add new value
+            old_val = returns[i - 1]
+            new_val = returns[i + window - 1]
+            running_sum += new_val - old_val
+            running_sq_sum += new_val ** 2 - old_val ** 2
+
+        mean = running_sum / window
+        # Variance using E[X²] - E[X]²
+        variance = (running_sq_sum / window) - (mean ** 2)
+
+        # Bessel's correction for sample std
+        if window > 1 and variance > 0:
+            std = np.sqrt(variance * window / (window - 1))
+        else:
+            std = 0.0
+
+        if std < 1e-10:
+            if mean > 0:
+                result[i] = MAX_RATIO_VALUE
+            elif mean < 0:
+                result[i] = -MAX_RATIO_VALUE
+            else:
+                result[i] = 0.0
+        else:
+            sharpe = (mean / std) * annualization
+            result[i] = np.clip(sharpe, -MAX_RATIO_VALUE, MAX_RATIO_VALUE)
+
+    return result
 
 
 def rolling_volatility(
@@ -355,17 +408,45 @@ def rolling_volatility(
     if len(returns) < window:
         return np.array([])
 
-    rolling_vols = []
+    n = len(returns)
+    result = np.empty(n - window + 1)
 
-    for i in range(window, len(returns) + 1):
-        window_returns = returns[i - window:i]
-        vol = calculate_volatility(window_returns, periods_per_year)
-        rolling_vols.append(vol)
+    # Initialize first window
+    window_returns = returns[:window]
+    running_sum = np.sum(window_returns)
+    running_sq_sum = np.sum(window_returns ** 2)
 
-    return np.array(rolling_vols)
+    annualization = np.sqrt(periods_per_year) * 100.0
+
+    for i in range(n - window + 1):
+        if i > 0:
+            # Slide window: remove old value, add new value
+            old_val = returns[i - 1]
+            new_val = returns[i + window - 1]
+            running_sum += new_val - old_val
+            running_sq_sum += new_val ** 2 - old_val ** 2
+
+        mean = running_sum / window
+        # Variance using E[X²] - E[X]²
+        variance = (running_sq_sum / window) - (mean ** 2)
+
+        # Use population std for volatility (consistent with calculate_volatility)
+        std = np.sqrt(max(0.0, variance))
+        result[i] = std * annualization
+
+    return result
 
 
 def _get_month_end_offset() -> str:
+    """
+    Get the correct month-end offset string for the installed pandas.
+
+    'ME' (month-end) was introduced in pandas 2.2 as replacement for 'M'.
+    The old 'M' alias is deprecated in 2.2+ but still works, while 'ME'
+    doesn't exist in pandas < 2.2.
+
+    This helper returns 'ME' for pandas >= 2.2, 'M' otherwise.
+    """
     pandas_version = tuple(int(x) for x in pd.__version__.split('.')[:2])
     if pandas_version >= (2, 2):
         return 'ME'
@@ -393,7 +474,7 @@ def monthly_returns(equity_curve: np.ndarray, timestamps: np.ndarray) -> pd.Data
     # calculate returns
     df['returns'] = df['equity'].pct_change()
 
-    # resample to monthly
+    # resample to monthly using version-appropriate offset
     month_offset = _get_month_end_offset()
     monthly = df['returns'].resample(month_offset).apply(lambda x: (1 + x).prod() - 1)
 

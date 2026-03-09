@@ -107,6 +107,10 @@ private:
             Price price_cents = static_cast<Price>(price * 100.0);
             Quantity quantity = calc_quantity(level, volume);
 
+            if (quantity == 0) {
+                continue;
+            }
+
             // Allocate from BacktestEngine's pool - no malloc, just a free-list pop
             std::pmr::polymorphic_allocator<Order> alloc{order_allocator_};
             auto order = std::allocate_shared<Order>(
@@ -127,10 +131,13 @@ private:
         double decay = std::exp(-0.3 * level);
         double vol_factor = 1.0 + std::log1p(volume / 1000000.0) * 0.1;
 
-        Quantity base = static_cast<Quantity>(base_depth_ * decay * vol_factor);
+        double raw_quantity = base_depth_ * decay * vol_factor;
 
         std::uniform_real_distribution<double> dist(0.9, 1.1);
-        return static_cast<Quantity>(base * dist(rng_));
+        raw_quantity *= dist(rng_);
+
+        Quantity quantity = static_cast<Quantity>(raw_quantity);
+        return std::max(static_cast<Quantity>(1), quantity);
     }
 
     double calc_volatility() const {

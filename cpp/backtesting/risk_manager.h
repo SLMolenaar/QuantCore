@@ -74,16 +74,40 @@ public:
 
         if (quantity == 0.0) {
             position_notionals_.erase(symbol);
+            last_prices_.erase(symbol);
         } else if (price > 0.0) {
             position_notionals_[symbol] = std::abs(quantity) * price;
+            last_prices_[symbol] = price;
         }
         // If price == 0 and quantity != 0, the notional entry from the previous
         // fill is retained — better than zeroing it out with no price information.
     }
 
+    void update_price(const std::string& symbol, double price) {
+        if (price <= 0.0) return;
+
+        last_prices_[symbol] = price;
+
+        auto pos_it = positions_.find(symbol);
+        if (pos_it != positions_.end() && pos_it->second != 0.0) {
+            position_notionals_[symbol] = std::abs(pos_it->second) * price;
+        }
+    }
+
+    void update_prices(const std::map<std::string, double>& prices) {
+        for (const auto& [symbol, price] : prices) {
+            update_price(symbol, price);
+        }
+    }
+
     double get_position(const std::string& symbol) const {
         auto it = positions_.find(symbol);
         return it != positions_.end() ? it->second : 0.0;
+    }
+
+    double get_last_price(const std::string& symbol) const {
+        auto it = last_prices_.find(symbol);
+        return it != last_prices_.end() ? it->second : 0.0;
     }
 
     void set_limits(const RiskLimits& limits) {
@@ -170,11 +194,14 @@ public:
     void reset() {
         positions_.clear();
         position_notionals_.clear();
+        last_prices_.clear();
         initial_capital_ = 0.0;
         current_capital_ = 0.0;
     }
 
     std::map<std::string, double> get_all_positions() const { return positions_; }
+
+    std::map<std::string, double> get_all_prices() const { return last_prices_; }
 
     // Sum of absolute notional exposures across all positions.
     double calculate_total_exposure() const {
@@ -191,6 +218,7 @@ private:
     std::map<std::string, double> positions_;
     // Last-known notional value (|qty| * price) per symbol, updated on each fill.
     std::map<std::string, double> position_notionals_;
+    std::map<std::string, double> last_prices_;
 
     // Returns total portfolio notional after hypothetically replacing `symbol`'s
     // exposure with `new_notional`. Uses stored notionals for all other symbols.

@@ -28,6 +28,13 @@ ProcessPoolExecutor. Key constraints:
     path is used regardless of n_jobs.
 
   * On Windows, guard your entry point with if __name__ == '__main__'.
+
+Return Format Convention
+------------------------
+This differs from PerformanceMetrics which uses PERCENTAGE format (10.5, -5.0).
+Use the helper functions to convert if needed:
+  - pct_to_decimal(10.5) -> 0.105
+  - decimal_to_pct(0.105) -> 10.5
 """
 
 import numpy as np
@@ -39,6 +46,16 @@ import itertools
 
 
 MIN_PARALLEL_TASKS = 4
+
+
+def pct_to_decimal(pct: float) -> float:
+    """Convert percentage to decimal (10.5 -> 0.105)"""
+    return pct / 100.0
+
+
+def decimal_to_pct(decimal: float) -> float:
+    """Convert decimal to percentage (0.105 -> 10.5)"""
+    return decimal * 100.0
 
 
 # ============================================================================
@@ -97,6 +114,8 @@ def _backtest_worker(args: tuple) -> Optional[dict]:
         (strategy_factory, params, serialized_data, initial_capital)
 
     Returns a plain dict (picklable) or None on failure.
+
+    NOTE: Returns are in DECIMAL format (0.105 = 10.5%)
     """
     strategy_factory, params, serialized_data, initial_capital = args
 
@@ -118,8 +137,8 @@ def _backtest_worker(args: tuple) -> Optional[dict]:
         return {
             'params':       params,
             'sharpe_ratio': metrics.sharpe_ratio,
-            'total_return': metrics.total_return / 100.0,
-            'max_drawdown': metrics.max_drawdown / 100.0,
+            'total_return': metrics.total_return / 100.0,  # pct -> decimal
+            'max_drawdown': metrics.max_drawdown / 100.0,  # pct -> decimal
             'num_trades':   metrics.total_trades,
             'final_value':  results['final_value'],
         }
@@ -185,8 +204,8 @@ def _window_worker(args: tuple) -> Optional[dict]:
             m   = calculate_all_metrics(equity_curve)
             oos = {
                 'sharpe_ratio': m.sharpe_ratio,
-                'total_return': m.total_return / 100.0,
-                'max_drawdown': m.max_drawdown / 100.0,
+                'total_return': m.total_return / 100.0,  # pct -> decimal
+                'max_drawdown': m.max_drawdown / 100.0,  # pct -> decimal
                 'num_trades':   m.total_trades,
                 'final_value':  oos_results['final_value'],
                 'equity_curve': equity_curve.tolist(),
@@ -217,17 +236,33 @@ def _window_worker(args: tuple) -> Optional[dict]:
 
 @dataclass
 class OptimizationResult:
-    """Single parameter combination result."""
+    """
+    Single parameter combination result.
+
+    NOTE: total_return and max_drawdown are in DECIMAL format:
+      - total_return=0.105 means 10.5% return
+      - max_drawdown=-0.05 means -5% drawdown
+    """
     params:       Dict[str, Any]
     sharpe_ratio: float
-    total_return: float
-    max_drawdown: float
+    total_return: float  # Decimal format (0.105 = 10.5%)
+    max_drawdown: float  # Decimal format (-0.05 = -5%)
     num_trades:   int
     final_value:  float
 
     def __repr__(self):
         return (f"OptimizationResult(sharpe={self.sharpe_ratio:.2f}, "
                 f"return={self.total_return:.2%})")
+
+    @property
+    def total_return_pct(self) -> float:
+        """Return as percentage (10.5 instead of 0.105)"""
+        return self.total_return * 100.0
+
+    @property
+    def max_drawdown_pct(self) -> float:
+        """Drawdown as percentage (-5.0 instead of -0.05)"""
+        return self.max_drawdown * 100.0
 
 
 @dataclass
@@ -369,8 +404,10 @@ class GridSearchOptimizer:
             row = r.params.copy()
             row.update({
                 'sharpe_ratio': r.sharpe_ratio,
-                'total_return': r.total_return,
-                'max_drawdown': r.max_drawdown,
+                'total_return': r.total_return,  # Decimal format
+                'total_return_pct': r.total_return_pct,  # Percentage for convenience
+                'max_drawdown': r.max_drawdown,  # Decimal format
+                'max_drawdown_pct': r.max_drawdown_pct,  # Percentage for convenience
                 'num_trades':   r.num_trades,
             })
             rows.append(row)
@@ -586,6 +623,7 @@ def monte_carlo_validation(
     Returns
     -------
     dict with arrays: sharpe_ratios, returns, drawdowns.
+    NOTE: returns and drawdowns are in DECIMAL format (0.105 = 10.5%)
     """
     symbol = list(data.keys())[0]
     bars   = data[symbol]
@@ -622,6 +660,6 @@ def monte_carlo_validation(
 
     return {
         'sharpe_ratios': np.array([r['sharpe_ratio'] for r in valid]),
-        'returns':        np.array([r['total_return']  for r in valid]),
-        'drawdowns':      np.array([r['max_drawdown']  for r in valid]),
+        'returns':        np.array([r['total_return']  for r in valid]),  # Decimal format
+        'drawdowns':      np.array([r['max_drawdown']  for r in valid]),  # Decimal format
     }
