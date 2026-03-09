@@ -20,11 +20,9 @@ enum class RiskCheckResult {
 
 struct RiskCheckResponse {
     RiskCheckResult result;
-    std::string reason;
+    std::string     reason;
 
-    bool is_approved() const {
-        return result == RiskCheckResult::APPROVED;
-    }
+    bool is_approved() const { return result == RiskCheckResult::APPROVED; }
 
     static RiskCheckResponse approve() {
         return {RiskCheckResult::APPROVED, ""};
@@ -36,22 +34,19 @@ struct RiskCheckResponse {
 };
 
 struct RiskLimits {
-    double max_position_pct = 0.20;
-    double max_leverage = 2.0;
-    double max_loss_pct = 0.50;
-    double max_order_value = 0.0;
-    bool enabled = true;
+    double max_position_pct  = 0.20;   // max single-asset notional / capital
+    double max_leverage      = 2.0;    // max total notional / capital
+    double max_loss_pct      = 0.50;   // max drawdown from initial capital
+    double max_order_value   = 0.0;    // 0 = disabled
+    bool   enabled           = true;
 
     void validate() const {
-        if (max_position_pct <= 0.0 || max_position_pct > 1.0) {
+        if (max_position_pct <= 0.0 || max_position_pct > 1.0)
             throw std::invalid_argument("max_position_pct must be between 0 and 1");
-        }
-        if (max_leverage <= 0.0 || max_leverage > 10.0) {
+        if (max_leverage <= 0.0 || max_leverage > 10.0)
             throw std::invalid_argument("max_leverage must be between 0 and 10");
-        }
-        if (max_loss_pct <= 0.0 || max_loss_pct > 1.0) {
+        if (max_loss_pct <= 0.0 || max_loss_pct > 1.0)
             throw std::invalid_argument("max_loss_pct must be between 0 and 1");
-        }
     }
 };
 
@@ -70,8 +65,20 @@ public:
         current_capital_ = current;
     }
 
-    void set_position(const std::string& symbol, double quantity) {
+    // Update the tracked quantity and last-known price for a symbol.
+    // Providing a price enables accurate notional-based leverage checks.
+    // A price of 0 leaves the existing notional unchanged (use when only
+    // correcting quantity after a partial fill).
+    void set_position(const std::string& symbol, double quantity, double price = 0.0) {
         positions_[symbol] = quantity;
+
+        if (quantity == 0.0) {
+            position_notionals_.erase(symbol);
+        } else if (price > 0.0) {
+            position_notionals_[symbol] = std::abs(quantity) * price;
+        }
+        // If price == 0 and quantity != 0, the notional entry from the previous
+        // fill is retained — better than zeroing it out with no price information.
     }
 
     double get_position(const std::string& symbol) const {
@@ -84,24 +91,19 @@ public:
         limits_.validate();
     }
 
-    const RiskLimits& get_limits() const {
-        return limits_;
-    }
+    const RiskLimits& get_limits() const { return limits_; }
 
     RiskCheckResponse check_order(
         const std::string& symbol,
-        Side side,
+        Side   side,
         double quantity,
         double price
     ) const {
-        if (!limits_.enabled) {
-            return RiskCheckResponse::approve();
-        }
+        if (!limits_.enabled) return RiskCheckResponse::approve();
 
         if (current_capital_ <= 0.0) {
             return RiskCheckResponse::reject(
-                RiskCheckResult::REJECTED_CAPITAL_LIMIT,
-                "No capital available"
+                RiskCheckResult::REJECTED_CAPITAL_LIMIT, "No capital available"
             );
         }
 
@@ -115,17 +117,12 @@ public:
             );
         }
 
-        double current_position = get_position(symbol);
-        double new_position = current_position;
-
-        if (side == Side::Buy) {
-            new_position += quantity;
-        } else {
-            new_position -= quantity;
-        }
-
-        double position_value = std::abs(new_position) * price;
-        double position_pct = position_value / current_capital_;
+        double current_qty      = get_position(symbol);
+        double new_qty          = (side == Side::Buy)
+                                    ? current_qty + quantity
+                                    : current_qty - quantity;
+        double new_notional     = std::abs(new_qty) * price;
+        double position_pct     = new_notional / current_capital_;
 
         if (position_pct > limits_.max_position_pct) {
             return RiskCheckResponse::reject(
@@ -135,8 +132,11 @@ public:
             );
         }
 
-        double total_exposure = calculate_total_exposure(symbol, new_position, price);
-        double leverage = total_exposure / current_capital_;
+        // Leverage is total portfolio notional exposure / capital.
+        // We compute it using the last-known notional for each symbol so that
+        // positions in different instruments are compared on equal footing.
+        double total_exposure = calculate_total_exposure(symbol, new_notional);
+        double leverage       = total_exposure / current_capital_;
 
         if (leverage > limits_.max_leverage) {
             return RiskCheckResponse::reject(
@@ -160,52 +160,50 @@ public:
 
     void update_position(const std::string& symbol, Side side, double quantity) {
         double current = get_position(symbol);
-
-        if (side == Side::Buy) {
-            positions_[symbol] = current + quantity;
-        } else {
-            positions_[symbol] = current - quantity;
-        }
+        positions_[symbol] = (side == Side::Buy)
+            ? current + quantity
+            : current - quantity;
+        // Notional is not updated here because we don't have a price; callers
+        // that need notional tracking should use set_position(sym, qty, price).
     }
 
     void reset() {
         positions_.clear();
+        position_notionals_.clear();
         initial_capital_ = 0.0;
         current_capital_ = 0.0;
     }
 
-    std::map<std::string, double> get_all_positions() const {
-        return positions_;
-    }
+    std::map<std::string, double> get_all_positions() const { return positions_; }
 
+    // Sum of absolute notional exposures across all positions.
     double calculate_total_exposure() const {
-        return calculate_total_exposure("", 0.0, 0.0);
+        double total = 0.0;
+        for (const auto& [sym, notional] : position_notionals_) total += notional;
+        return total;
     }
 
 private:
     RiskLimits limits_;
-    double initial_capital_;
-    double current_capital_;
-    std::map<std::string, double> positions_;
+    double     initial_capital_;
+    double     current_capital_;
 
+    std::map<std::string, double> positions_;
+    // Last-known notional value (|qty| * price) per symbol, updated on each fill.
+    std::map<std::string, double> position_notionals_;
+
+    // Returns total portfolio notional after hypothetically replacing `symbol`'s
+    // exposure with `new_notional`. Uses stored notionals for all other symbols.
     double calculate_total_exposure(
         const std::string& symbol_to_update,
-        double new_position,
-        double price
+        double new_notional
     ) const {
         double total = 0.0;
-
-        for (const auto& [sym, qty] : positions_) {
-            if (sym == symbol_to_update) {
-                continue;
-            }
-            total += std::abs(qty);
+        for (const auto& [sym, notional] : position_notionals_) {
+            if (sym == symbol_to_update) continue;
+            total += notional;
         }
-
-        if (!symbol_to_update.empty()) {
-            total += std::abs(new_position);
-        }
-
+        total += new_notional;
         return total;
     }
 };
