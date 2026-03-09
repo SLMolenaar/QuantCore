@@ -1,7 +1,8 @@
 #pragma once
 
 #include <cstdint>
-#include "Order.h"
+#include <memory>
+#include <list>
 
 class Order;
 using Price = std::int32_t;

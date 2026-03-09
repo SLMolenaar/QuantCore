@@ -365,6 +365,14 @@ def rolling_volatility(
     return np.array(rolling_vols)
 
 
+def _get_month_end_offset() -> str:
+    pandas_version = tuple(int(x) for x in pd.__version__.split('.')[:2])
+    if pandas_version >= (2, 2):
+        return 'ME'
+    else:
+        return 'M'
+
+
 def monthly_returns(equity_curve: np.ndarray, timestamps: np.ndarray) -> pd.DataFrame:
     """
     Calculate monthly returns table
@@ -386,7 +394,8 @@ def monthly_returns(equity_curve: np.ndarray, timestamps: np.ndarray) -> pd.Data
     df['returns'] = df['equity'].pct_change()
 
     # resample to monthly
-    monthly = df['returns'].resample('ME').apply(lambda x: (1 + x).prod() - 1)
+    month_offset = _get_month_end_offset()
+    monthly = df['returns'].resample(month_offset).apply(lambda x: (1 + x).prod() - 1)
 
     # pivot to year x month table
     monthly_df = pd.DataFrame({

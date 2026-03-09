@@ -177,7 +177,9 @@ private:
     // order_pool_ must be declared first: it outlives mms_ and engines_,
     // which hold orders allocated from this pool.
     std::pmr::unsynchronized_pool_resource order_pool_;
+    std::pmr::unsynchronized_pool_resource event_pool_;
 
+    // Now declare objects that allocate from the pools above.
     EventQueue                eq_;
     std::shared_ptr<Strategy> strat_;
 
@@ -207,9 +209,6 @@ private:
     size_t volatility_lookback_;
     size_t bars_per_year_;
 
-    // Pool allocator for events: avoids repeated heap allocation in the hot loop.
-    std::pmr::unsynchronized_pool_resource event_pool_;
-
     static constexpr size_t PRICE_HISTORY_BUFFER = 10;
 
     template<typename T, typename... Args>
@@ -237,10 +236,23 @@ private:
         for (const auto& [symbol, engine] : engines_) {
             portfolio_->update_position(symbol, engine->get_position());
         }
+
         // curr_cap_ tracks total portfolio value so that position sizing
         // in handle_sig always reflects the current account equity.
-        curr_cap_ = init_cap_ + get_total_pnl();
-        portfolio_->set_cash(curr_cap_);
+        double total_equity = init_cap_ + get_total_pnl();
+        curr_cap_ = total_equity;  // For position sizing calculations
+
+        // Calculate actual liquid cash (equity minus position notional values)
+        double total_position_value = 0.0;
+        for (const auto& [symbol, engine] : engines_) {
+            double pos = engine->get_position();
+            auto px_it = last_px_.find(symbol);
+            if (px_it != last_px_.end() && pos != 0.0) {
+                total_position_value += std::abs(pos * px_it->second);
+            }
+        }
+        double liquid_cash = total_equity - total_position_value;
+        portfolio_->set_cash(liquid_cash);
     }
 
     double calculate_volatility(const std::string& symbol) const {
@@ -391,11 +403,15 @@ private:
 
         auto trades = engine->execute_order(order);
         for (const auto& trade : trades) {
+            const TradeInfo& our_trade = (ord->get_side() == Side::Buy)
+                ? trade.GetBidTrade()
+                : trade.GetAskTrade();
+
             auto fill = make_event<FillEvent>(
                 ord->get_symbol(), ord->get_timestamp(),
                 ord->get_order_id(), ord->get_side(),
-                trade.GetBidTrade().quantity_,
-                trade.GetBidTrade().price_ / 100.0,
+                our_trade.quantity_,
+                our_trade.price_ / 100.0,
                 0.0
             );
             eq_.push(fill);

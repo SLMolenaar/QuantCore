@@ -26,7 +26,8 @@ namespace quantcore {
 
             BarSeries bars;
             std::string line;
-            size_t line_nr = 0;
+            size_t line_nr = 0;      // Total lines read (including header)
+            size_t data_lines = 0;
             size_t bad_lines = 0;
 
             // Skip header
@@ -40,6 +41,8 @@ namespace quantcore {
                 line_nr++;
                 if (line.empty()) continue;
 
+                data_lines++;
+
                 try {
                     auto bar = parse_line(line, symbol);
                     bars.push_back(bar);
@@ -52,19 +55,23 @@ namespace quantcore {
             }
 
             // Check if too many lines were skipped, if more than 20% of lines are bad the file is probably corrupted
-            double skip_pct = static_cast<double>(bad_lines) / line_nr;
+
+            double skip_pct = (data_lines > 0)
+                ? static_cast<double>(bad_lines) / data_lines
+                : 0.0;
+
             if (skip_pct > max_skip_pct) {
                 throw std::runtime_error(
                     "Data quality error: " + std::to_string(bad_lines) +
-                    " out of " + std::to_string(line_nr) +
-                    " lines skipped (" + std::to_string(skip_pct * 100) +
+                    " out of " + std::to_string(data_lines) +
+                    " data lines skipped (" + std::to_string(skip_pct * 100) +
                     "%), exceeds threshold of " + std::to_string(max_skip_pct * 100) + "%"
                 );
             }
 
             if (bad_lines > 0) {
                 std::cerr << "INFO: Skipped " << bad_lines
-                          << " lines out of " << line_nr << " total lines ("
+                          << " lines out of " << data_lines << " data lines ("
                           << (skip_pct * 100) << "%)\n";
             }
 
@@ -124,15 +131,21 @@ namespace quantcore {
             try {
                 int64_t ts = std::stoll(ts_str);
 
-                // If timestamp in seconds, convert to nanoseconds
-                if (ts < 4000000000LL) {
-                    return ts * 1000000000LL;
+
+                if (ts < 4'000'000'000LL) {
+                    // Seconds -> nanoseconds
+                    return ts * 1'000'000'000LL;
                 }
-                // If timestamp in milliseconds, convert to nanoseconds
-                else if (ts < 4000000000000LL) {
-                    return ts * 1000000LL;
+                else if (ts < 4'000'000'000'000LL) {
+                    // Milliseconds -> nanoseconds
+                    return ts * 1'000'000LL;
+                }
+                else if (ts < 4'000'000'000'000'000LL) {
+                    // Microseconds -> nanoseconds
+                    return ts * 1'000LL;
                 }
                 else {
+                    // Already nanoseconds
                     return ts;
                 }
             } catch (...) {

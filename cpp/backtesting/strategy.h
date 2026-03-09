@@ -42,8 +42,8 @@ public:
 
     void generate_signal(const std::string& symbol,
                         SignalType sig_type,
-                        double strength = 1.0,
-                        int64_t timestamp_ns = 0) {
+                        double strength,
+                        int64_t timestamp_ns) {
         auto sig = std::make_shared<SignalEvent>(
             symbol, timestamp_ns, sig_type, strength, name_);
         signals_.push_back(sig);

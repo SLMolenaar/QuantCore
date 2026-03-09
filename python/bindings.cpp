@@ -186,7 +186,7 @@ PYBIND11_MODULE(_core, m) {
         .def("reset",            &Strategy::reset)
         .def("generate_signal",  &Strategy::generate_signal,
              py::arg("symbol"), py::arg("signal_type"),
-             py::arg("strength") = 1.0, py::arg("timestamp_ns") = 0)
+             py::arg("strength"), py::arg("timestamp_ns"))
         .def("set_position",     &Strategy::set_position,
              py::arg("symbol"), py::arg("quantity"))
         .def("get_position",     &Strategy::get_position,   py::arg("symbol"))
@@ -268,7 +268,8 @@ PYBIND11_MODULE(_core, m) {
         .def("get_timestamps",       &BacktestEngine::get_timestamps)
         .def("set_risk_limits",      &BacktestEngine::set_risk_limits)
         .def("get_risk_limits",      &BacktestEngine::get_risk_limits)
-        .def("get_risk_manager",     &BacktestEngine::get_risk_manager);
+        .def("get_risk_manager",     &BacktestEngine::get_risk_manager)
+        .def("get_portfolio_context", &BacktestEngine::get_portfolio_context);
 
     // ============================================================================
     // POSITION SIZING

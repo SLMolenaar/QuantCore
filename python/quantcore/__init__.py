@@ -60,6 +60,8 @@ RiskCheckResponse = _core.RiskCheckResponse
 RiskLimits        = _core.RiskLimits
 RiskManager       = _core.RiskManager
 
+PortfolioContext = _core.PortfolioContext
+
 hello   = _core.hello
 version = _core.version
 
@@ -205,6 +207,8 @@ __all__ = [
     'PositionCalculator', 'PortfolioPositionSizer',
     # Risk management
     'RiskCheckResult', 'RiskCheckResponse', 'RiskLimits', 'RiskManager',
+    # Portfolio context
+    'PortfolioContext',
     # Utilities
     'hello', 'version',
 ]
