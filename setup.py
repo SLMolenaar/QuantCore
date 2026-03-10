@@ -72,7 +72,7 @@ setup(
     url="https://github.com/SLMolenaar/quantcore",
     packages=find_packages(where="python"),
     package_dir={"": "python"},
-    ext_modules=[CMakeExtension("quantcore._core", sourcedir=str(here))],
+    ext_modules=[CMakeExtension("quantcore._core", sourcedir=str(here / "python"))],
     cmdclass={"build_ext": CMakeBuild},
     install_requires=[
         "numpy>=1.24.0",
