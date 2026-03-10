@@ -14,7 +14,7 @@
 #include "strategies/mean_reversion.h"
 
 #include "orderbook/Order.h"
-#include "orderbook/OrderType.h"
+#include "orderbook/Ordertype.h"
 
 using namespace quantcore;
 

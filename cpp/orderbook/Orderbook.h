@@ -15,7 +15,7 @@
 #include "Trade.h"
 #include "LevelInfo.h"
 #include "Types.h"
-#include "OrderType.h"
+#include "Ordertype.h"
 #include "Constants.h"
 #include "MarketDataFeed.h"
 #include "ExchangeRules.h"

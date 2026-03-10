@@ -4,7 +4,7 @@
 #include "orderbook/Order.h"
 #include "orderbook/Types.h"
 #include "orderbook/Trade.h"
-#include "orderbook/OrderType.h"
+#include "orderbook/Ordertype.h"
 #include <map>
 #include <string>
 #include <memory>

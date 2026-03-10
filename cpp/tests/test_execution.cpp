@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 #include "Execution.h"
 #include "orderbook/Order.h"
-#include "orderbook/OrderType.h"
+#include "orderbook/Ordertype.h"
 #include <memory>
 #include <cmath>
 

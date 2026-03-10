@@ -6,7 +6,7 @@
 #include "orderbook/Orderbook.h"
 #include "orderbook/Order.h"
 #include "orderbook/OrderModify.h"
-#include "orderbook/OrderType.h"
+#include "orderbook/Ordertype.h"
 #include "orderbook/Trade.h"
 #include "orderbook/Types.h"
 #include "orderbook/ExchangeRules.h"
