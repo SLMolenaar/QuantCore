@@ -38,7 +38,7 @@ results = qc.run_backtest(
 print(results)
 ```
 
-That's it. The engine handles fills, position tracking, and PnL automatically. For a full tearsheet:
+The engine handles fills, position tracking, and PnL automatically. For a full tearsheet:
 
 ```python
 from quantcore.analytics import calculate_all_metrics, calculate_returns
@@ -161,22 +161,34 @@ engine.set_risk_limits(limits)
 
 ## Performance
 
-The engine is single-threaded. Measured on Windows (AMD/Intel, Release build, MSVC):
+Single-threaded. Measured on Windows (Release build, MSVC). Full results in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
+
+**Order book**
+
+| Pattern | Ops/s |
+|---|---|
+| Add + cancel (market-maker quote refresh) | 13.0 M ops/s |
+| Add + match (taker sweep) | 4.9 M ops/s |
+
+These are raw order book operations with no engine overhead. The matching engine is not the bottleneck at daily-bar scale.
+
+**End-to-end backtest**
 
 | Scenario | Bars/s | Latency (p99) |
 |---|---|---|
-| 1-year backtest (252 bars) | ~265 K bars/s | 0.95 ms |
-| 5-year backtest (1,260 bars) | ~270 K bars/s | 1.75 ms |
-| Order book: add + cancel | 12.9 M ops/s | n/a |
-| Order book: add + match  | 4.9 M ops/s  | n/a |
+| 1-year (252 bars) | ~270 K bars/s | 0.93 ms |
+| 5-year (1,260 bars) | ~270 K bars/s | - |
+| 1,000-year stress (252,000 bars) | ~290 K bars/s | - |
 
-All three 1-year latency checks pass the < 5ms target. The order book isolation numbers are the ceiling. The engine loop itself is the bottleneck at this scale, not the matching engine.
+Throughput is stable across dataset sizes. A 1-year daily backtest completes in under 1 ms at p99.
 
-Run the benchmark suite yourself:
+Run the benchmarks yourself:
 
 ```bash
-cmake --build build --target quantcore_benchmarks
-./build/quantcore_benchmarks
+cmake --build build --target bench_backtest_engine
+./build/bench_backtest_engine
+
+python benchmarks/bench_python.py
 ```
 
 ---
@@ -301,7 +313,7 @@ quantcore/
 | Event-driven | ✅ | ✅ | ✅ |
 | Look-ahead prevention | ✅ Priority queue | ✅ | ✅ |
 | Python strategy API | ✅ pybind11 | ✅ native | ✅ native |
-| Throughput (bars/s) | ~265 K | ~50 K | ~100 K |
+| Throughput (bars/s) | ~270 K | ~50 K | ~100 K |
 | Maintenance | Active | Stale | Inactive |
 
 The main differentiator is the order book. Backtrader and Zipline assume you fill at the bar's close price. QuantCore routes orders through a real price-time priority matching engine, which gives you realistic partial fills, spread simulation, and tick-level execution when you have tick data.
