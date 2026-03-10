@@ -15,6 +15,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/cibuildwheel
+            ~/.cache/cibuildwheel
+            ~/AppData/Local/pypa/cibuildwheel/Cache
+          key: cibuildwheel-${{ runner.os }}
+
       - uses: pypa/cibuildwheel@v2.22
         with:
           package-dir: python/
