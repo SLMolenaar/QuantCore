@@ -8,6 +8,7 @@ jobs:
   build_wheels:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
@@ -30,6 +31,7 @@ jobs:
 
   publish:
     needs: build_wheels
+    if: always()
     runs-on: ubuntu-latest
 
     steps:
