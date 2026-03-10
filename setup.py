@@ -28,6 +28,11 @@ class CMakeBuild(build_ext):
 
         extdir = Path(self.get_ext_fullpath(ext.name)).parent.absolute()
 
+        # Add cmake installed via pip to PATH
+        cmake_python_bin = Path(sys.executable).parent
+        env = os.environ.copy()
+        env["PATH"] = str(cmake_python_bin) + os.pathsep + env.get("PATH", "")
+
         cmake_args = [
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}",
             f"-DPython3_EXECUTABLE={sys.executable}",
@@ -37,7 +42,13 @@ class CMakeBuild(build_ext):
         build_args = ["--config", "Release"]
 
         if platform.system() == "Windows":
-            cmake_args += ["-A", "x64"]
+            cmake_args += [
+                "-A", "x64",
+                # On Windows, CMake appends the config name as a subdirectory
+                # unless the config-specific variable is set explicitly.
+                f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE={extdir}",
+                f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE={extdir}",
+            ]
             build_args += ["--", "/m"]
         else:
             cpu_count = os.cpu_count() or 1
@@ -49,10 +60,12 @@ class CMakeBuild(build_ext):
         subprocess.check_call(
             ["cmake", str(ext.sourcedir)] + cmake_args,
             cwd=build_temp,
+            env=env,
             )
         subprocess.check_call(
             ["cmake", "--build", "."] + build_args,
             cwd=build_temp,
+            env=env,
             )
 
 
@@ -63,7 +76,7 @@ long_description = readme.read_text(encoding="utf-8") if readme.exists() else ""
 
 setup(
     name="quantcore",
-    version="0.1.2",
+    version="0.1.3",
     author="Stefaan Molenaar",
     author_email="StefaanLMolenaar@gmail.com",
     description="High-performance C++20 backtesting engine with Python interface",
