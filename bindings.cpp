@@ -119,6 +119,13 @@ PYBIND11_MODULE(_core, m) {
         .def("get_close",     &MarketDataEvent::get_close)
         .def("get_volume",    &MarketDataEvent::get_volume)
         .def("get_price",     &MarketDataEvent::get_price)
+        .def_property_readonly("symbol",       &MarketDataEvent::get_symbol)
+        .def_property_readonly("timestamp_ns", &MarketDataEvent::get_timestamp)
+        .def_property_readonly("open",         &MarketDataEvent::get_open)
+        .def_property_readonly("high",         &MarketDataEvent::get_high)
+        .def_property_readonly("low",          &MarketDataEvent::get_low)
+        .def_property_readonly("close",        &MarketDataEvent::get_close)
+        .def_property_readonly("volume",       &MarketDataEvent::get_volume)
         .def("__repr__", [](const MarketDataEvent& e) { return e.to_string(); });
 
     py::class_<SignalEvent, std::shared_ptr<SignalEvent>>(m, "SignalEvent")
@@ -130,6 +137,11 @@ PYBIND11_MODULE(_core, m) {
         .def("get_signal_type", &SignalEvent::get_signal_type)
         .def("get_strength",    &SignalEvent::get_strength)
         .def("get_strategy_id", &SignalEvent::get_strategy_id)
+        .def_property_readonly("symbol",       &SignalEvent::get_symbol)
+        .def_property_readonly("timestamp_ns", &SignalEvent::get_timestamp)
+        .def_property_readonly("signal_type",  &SignalEvent::get_signal_type)
+        .def_property_readonly("strength",     &SignalEvent::get_strength)
+        .def_property_readonly("strategy_id",  &SignalEvent::get_strategy_id)
         .def("__repr__", [](const SignalEvent& e) { return e.to_string(); });
 
     py::class_<FillEvent, std::shared_ptr<FillEvent>>(m, "FillEvent")
@@ -145,6 +157,13 @@ PYBIND11_MODULE(_core, m) {
         .def("get_price",      &FillEvent::get_price)
         .def("get_commission", &FillEvent::get_commission)
         .def("get_total_cost", &FillEvent::get_total_cost)
+        .def_property_readonly("symbol",       &FillEvent::get_symbol)
+        .def_property_readonly("timestamp_ns", &FillEvent::get_timestamp)
+        .def_property_readonly("order_id",     &FillEvent::get_order_id)
+        .def_property_readonly("side",         &FillEvent::get_side)
+        .def_property_readonly("quantity",     &FillEvent::get_quantity)
+        .def_property_readonly("price",        &FillEvent::get_price)
+        .def_property_readonly("commission",   &FillEvent::get_commission)
         .def("__repr__", [](const FillEvent& e) { return e.to_string(); });
 
     // ============================================================================
@@ -261,7 +280,8 @@ PYBIND11_MODULE(_core, m) {
             },
             py::arg("symbol"), py::arg("data"))
 
-        .def("set_strategy",         &BacktestEngine::set_strategy,       py::arg("strategy"))
+        .def("set_strategy",         &BacktestEngine::set_strategy,
+             py::arg("strategy"), py::keep_alive<1, 2>())
         .def("run",                  &BacktestEngine::run)
         .def("get_total_pnl",        &BacktestEngine::get_total_pnl)
         .def("get_total_fees",       &BacktestEngine::get_total_fees)
@@ -273,7 +293,13 @@ PYBIND11_MODULE(_core, m) {
         .def("set_risk_limits",      &BacktestEngine::set_risk_limits)
         .def("get_risk_limits",      &BacktestEngine::get_risk_limits)
         .def("get_risk_manager",     &BacktestEngine::get_risk_manager)
-        .def("get_portfolio_context", &BacktestEngine::get_portfolio_context);
+        .def("get_portfolio_context", &BacktestEngine::get_portfolio_context)
+        .def("set_bars_per_year",    &BacktestEngine::set_bars_per_year,    py::arg("bars_per_year"))
+        .def("get_bars_per_year",    &BacktestEngine::get_bars_per_year)
+        .def("set_volatility_params", &BacktestEngine::set_volatility_params,
+             py::arg("default_vol"), py::arg("stop_distance"), py::arg("lookback"))
+        .def("configure_market_maker", &BacktestEngine::configure_market_maker,
+             py::arg("levels"), py::arg("spread"), py::arg("depth"));
 
     // ============================================================================
     // POSITION SIZING
