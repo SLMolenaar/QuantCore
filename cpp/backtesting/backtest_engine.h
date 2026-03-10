@@ -60,6 +60,9 @@ public:
             throw std::invalid_argument("Cannot add empty bar series");
         }
         data_[symbol] = bars;
+        engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
+        mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
+        price_history_[symbol] = std::deque<double>();
     }
 
     void set_strategy(std::shared_ptr<Strategy> strat) {
@@ -109,10 +112,7 @@ public:
         if (data_.empty()) throw std::runtime_error("No market data loaded");
 
         eq_.clear();
-        engines_.clear();
-        mms_.clear();
         last_px_.clear();
-        price_history_.clear();
         curr_cap_ = init_cap_;
         next_oid_ = 1;
         strat_->reset();
@@ -125,6 +125,13 @@ public:
         equity_.clear();
         timestamps_.clear();
 
+        // Re-initialize engines and market makers to reset accumulated state between runs.
+        for (const auto& [symbol, bars] : data_) {
+            engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
+            mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
+            price_history_[symbol] = std::deque<double>();
+        }
+
         first_bar_timestamp_ = std::numeric_limits<int64_t>::max();
         for (const auto& [symbol, bars] : data_) {
             if (!bars.empty() && bars.front().timestamp_ns < first_bar_timestamp_) {
@@ -133,12 +140,6 @@ public:
         }
         if (first_bar_timestamp_ == std::numeric_limits<int64_t>::max()) {
             first_bar_timestamp_ = 0;
-        }
-
-        for (const auto& [symbol, bars] : data_) {
-            engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
-            mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
-            price_history_[symbol] = std::deque<double>();
         }
 
         load_data();
