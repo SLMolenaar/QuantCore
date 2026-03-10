@@ -22,4 +22,13 @@ target_compile_definitions(_core PRIVATE
         VERSION_INFO=${SKBUILD_PROJECT_VERSION}
 )
 
+# On Linux, statically link libstdc++ and libgcc so the wheel has no
+# external C++ runtime dependencies and passes auditwheel's manylinux check.
+if(UNIX AND NOT APPLE)
+    target_link_options(_core PRIVATE
+            -static-libstdc++
+            -static-libgcc
+    )
+endif()
+
 install(TARGETS _core DESTINATION quantcore)
