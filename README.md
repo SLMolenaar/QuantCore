@@ -1,5 +1,9 @@
 # QuantCore
 
+![Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)
+![C++](https://img.shields.io/badge/C%2B%2B-20-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 High-performance backtesting engine for trading strategies, written in C++20 with a Python research interface.
 
 ---
