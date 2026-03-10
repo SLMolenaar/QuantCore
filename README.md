@@ -323,6 +323,22 @@ The main differentiator is the order book. Backtrader and Zipline assume you fil
 
 ---
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Open areas if you want to dig in:
+
+- **Stop / Stop-Limit orders**: order type enum and matching engine
+- **VWAP / TWAP algos**: `ExecutionEngine`, child order slicing
+- **Tick data pipeline**: the engine is bar-agnostic internally; the data loader needs extending
+- **Trading calendar**: holiday/early-close filtering before bars hit the engine
+- **Multi-strategy portfolio**: shared capital across strategies with a meta-allocator
+- **Parallel sweeps on Linux**: `n_jobs` exists but Windows spawn overhead kills it; a Linux worker pool would make it actually useful
+
+The engine doesn't handle corporate actions, survivorship bias, or timezone normalization. That's the data layer's job. Feed it clean adjusted data and none of those are problems.
+
+---
+
+
 ## License
 
 MIT: see [LICENSE](LICENSE).
