@@ -22,6 +22,7 @@ jobs:
         env:
           CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-*"
           CIBW_SKIP: "*-win32 *-manylinux_i686"
+          CIBW_BUILD_FRONTEND: "pip"
           CIBW_BEFORE_BUILD: "pip install pybind11 cmake"
           CIBW_MANYLINUX_X86_64_IMAGE: "quay.io/pypa/manylinux_2_28_x86_64"
           CIBW_MANYLINUX_AARCH64_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64"
@@ -44,7 +45,7 @@ jobs:
           path: wheelhouse
           merge-multiple: true
 
-      - uses: pypa/gh-action-pypi-publish@v1
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: wheelhouse/
