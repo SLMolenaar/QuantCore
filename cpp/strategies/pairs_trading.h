@@ -33,6 +33,7 @@ public:
         , symbol1_seen_(false)
         , symbol2_seen_(false)
         , warning_issued_(false)
+        , bars_processed_(0)
     {
         if (symbol1 == symbol2)
             throw std::invalid_argument("Symbols must be different for pairs trading");
@@ -58,7 +59,8 @@ public:
         if (!warning_issued_ && (symbol1_seen_ != symbol2_seen_)) {
             // We've seen at least some bars, but only one symbol
             // Check if we've waited long enough (more than lookback bars)
-            size_t bars_seen = symbol1_seen_ ? spread_history_.size() : 0;
+            size_t bars_seen = symbol1_seen_ ?
+                spread_history_.size() : 0;
             if (symbol2_seen_ && !symbol1_seen_) {
                 bars_seen = spread_history_.size();
             }
@@ -72,13 +74,11 @@ public:
 
         if (price1_ == 0.0 || price2_ == 0.0) {
             if (!warning_issued_) {
-                bool one_seen = symbol1_seen_ || symbol2_seen_;
+                bool one_seen  = symbol1_seen_ || symbol2_seen_;
                 bool both_seen = symbol1_seen_ && symbol2_seen_;
                 if (one_seen && !both_seen) {
-                    // Count how many bars we've processed
-                    static size_t bars_processed = 0;
-                    bars_processed++;
-                    if (bars_processed > lookback_) {
+                    bars_processed_++;
+                    if (bars_processed_ > lookback_) {
                         std::cerr << "WARNING: PairsTrading strategy is missing data for ";
                         if (!symbol1_seen_) {
                             std::cerr << "symbol1 (" << symbol1_ << ")";
@@ -132,12 +132,13 @@ public:
     void reset() override {
         Strategy::reset();
         spread_history_.clear();
-        price1_    = 0.0;
-        price2_    = 0.0;
-        direction_ = Direction::NONE;
-        symbol1_seen_ = false;
-        symbol2_seen_ = false;
-        warning_issued_ = false;
+        price1_          = 0.0;
+        price2_          = 0.0;
+        direction_       = Direction::NONE;
+        symbol1_seen_    = false;
+        symbol2_seen_    = false;
+        warning_issued_  = false;
+        bars_processed_  = 0;
     }
 
     bool in_trade() const { return direction_ != Direction::NONE; }
@@ -161,9 +162,10 @@ private:
     double             price1_;
     double             price2_;
 
-    bool symbol1_seen_;
-    bool symbol2_seen_;
-    bool warning_issued_;
+    bool   symbol1_seen_;
+    bool   symbol2_seen_;
+    bool   warning_issued_;
+    size_t bars_processed_;
 
     double calculate_mean() const {
         double sum = 0.0;
