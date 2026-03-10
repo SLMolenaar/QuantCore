@@ -15,6 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install virtualenv
+        run: pip install virtualenv
+
       - uses: actions/cache@v4
         with:
           path: |
