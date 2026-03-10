@@ -39,5 +39,10 @@ Homepage = "https://github.com/SLMolenaar/quantcore"
 Source = "https://github.com/SLMolenaar/quantcore"
 
 [tool.scikit-build]
+cmake.source-dir = "python"
 cmake.build-type = "Release"
 wheel.packages = ["python/quantcore"]
+
+[tool.scikit-build.cmake.define]
+BUILD_TESTS = "OFF"
+BUILD_BENCHMARKS = "OFF"

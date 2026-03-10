@@ -15,15 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build wheel
+      - name: Build and repair wheel
         run: |
           PYBIN="/opt/python/${{ matrix.python }}/bin"
           "$PYBIN/pip" install scikit-build-core pybind11 build
           "$PYBIN/python" -m build --wheel --outdir /tmp/built_wheel .
-
-      - name: Repair wheel
-        run: |
-          pip3 install auditwheel
           auditwheel repair /tmp/built_wheel/*.whl --wheel-dir wheelhouse/
 
       - uses: actions/upload-artifact@v4
