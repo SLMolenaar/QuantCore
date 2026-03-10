@@ -24,7 +24,7 @@ class Orderbook {
 private:
     struct OrderEntry {
         OrderPointer order_{nullptr};
-        OrderPointers::iterator location_;
+        std::size_t location_; // index into the price level vector
     };
 
     std::map<Price, OrderPointers, std::greater<Price> > bids_;
@@ -188,7 +188,7 @@ private:
         return ExecuteMatchesForFillOrKill(order, matchingOrders);
     }
 
-    Trades MatchOrders() {
+    Trades MatchOrders(std::optional<OrderId> iocOrderId = {}) {
         // No upfront reserve - the vast majority of AddOrder() calls (market maker
         // quotes placed away from mid) produce zero trades. Reserving orders_.size()
         // on every call was allocating ~25M times unnecessarily over a 1000yr run.
@@ -202,11 +202,15 @@ private:
 
             if (bidPrice < askPrice) break;
 
+            // Cursors into the front of each price level vector.
+            // Filled orders are collected and erased in one shot after the inner loop
+            // to avoid repeated O(n) shifts during matching.
+            std::size_t bidIdx = 0, askIdx = 0;
             std::vector<OrderId> filledOrders;
 
-            while (!bids.empty() && !asks.empty()) {
-                auto &bid = bids.front();
-                auto &ask = asks.front();
+            while (bidIdx < bids.size() && askIdx < asks.size()) {
+                auto &bid = bids[bidIdx];
+                auto &ask = asks[askIdx];
 
                 Quantity quantity = std::min(bid->GetRemainingQuantity(), ask->GetRemainingQuantity());
 
@@ -216,9 +220,9 @@ private:
                 bool askIsMarket = (ask->GetPrice() == std::numeric_limits<Price>::max() ||
                                     ask->GetPrice() == std::numeric_limits<Price>::min());
 
-                if (bidIsMarket && !askIsMarket)       tradePrice = ask->GetPrice();
-                else if (askIsMarket && !bidIsMarket)  tradePrice = bid->GetPrice();
-                else                                    tradePrice = ask->GetPrice();
+                if (bidIsMarket && !askIsMarket)      tradePrice = ask->GetPrice();
+                else if (askIsMarket && !bidIsMarket) tradePrice = bid->GetPrice();
+                else                                  tradePrice = ask->GetPrice();
 
                 trades.push_back(Trade{
                     TradeInfo{bid->GetOrderId(), tradePrice, quantity},
@@ -230,31 +234,41 @@ private:
 
                 if (bid->IsFilled()) {
                     filledOrders.push_back(bid->GetOrderId());
-                    bids.pop_front();
+                    ++bidIdx;
                 }
                 if (ask->IsFilled()) {
                     filledOrders.push_back(ask->GetOrderId());
-                    asks.pop_front();
+                    ++askIdx;
                 }
             }
 
+            // Remove filled orders from the lookup map
             for (const auto &orderId: filledOrders) {
                 orders_.erase(orderId);
+            }
+
+            // Erase the consumed prefix from each vector in one shot.
+            // Remaining orders' indices in orders_ are now stale — fix them up.
+            if (bidIdx > 0) {
+                bids.erase(bids.begin(), bids.begin() + bidIdx);
+                for (std::size_t i = 0; i < bids.size(); ++i) {
+                    orders_.at(bids[i]->GetOrderId()).location_ = i;
+                }
+            }
+            if (askIdx > 0) {
+                asks.erase(asks.begin(), asks.begin() + askIdx);
+                for (std::size_t i = 0; i < asks.size(); ++i) {
+                    orders_.at(asks[i]->GetOrderId()).location_ = i;
+                }
             }
 
             if (bids.empty()) bids_.erase(bidPrice);
             if (asks.empty()) asks_.erase(askPrice);
         }
 
-        // Handle IOC orders
-        std::vector<OrderId> iocOrdersToCancel;
-        for (const auto &[orderId, entry]: orders_) {
-            if (entry.order_->GetOrderType() == OrderType::ImmediateOrCancel) {
-                iocOrdersToCancel.push_back(orderId);
-            }
-        }
-        for (const auto &orderId: iocOrdersToCancel) {
-            CancelOrder(orderId);
+        // Cancel any unfilled IOC remainder directly by ID — no book scan needed.
+        if (iocOrderId.has_value()) {
+            CancelOrder(iocOrderId.value());
         }
 
         return trades;
@@ -304,8 +318,7 @@ private:
                 );
                 auto &orders = bids_[level.price];
                 orders.push_back(order);
-                auto iterator = std::next(orders.begin(), orders.size() - 1);
-                orders_.insert({order->GetOrderId(), OrderEntry{order, iterator}});
+                orders_.insert({order->GetOrderId(), OrderEntry{order, orders.size() - 1}});
             } catch (const std::invalid_argument &) { continue; }
         }
 
@@ -318,8 +331,7 @@ private:
                 );
                 auto &orders = asks_[level.price];
                 orders.push_back(order);
-                auto iterator = std::next(orders.begin(), orders.size() - 1);
-                orders_.insert({order->GetOrderId(), OrderEntry{order, iterator}});
+                orders_.insert({order->GetOrderId(), OrderEntry{order, orders.size() - 1}});
             } catch (const std::invalid_argument &) { continue; }
         }
 
@@ -367,37 +379,51 @@ public:
             return MatchFillOrKill(order);
         }
 
-        OrderPointers::iterator iterator;
+        OrderPointers* ordersPtr;
 
         if (order->GetSide() == Side::Buy) {
-            auto &orders = bids_[order->GetPrice()];
-            orders.push_back(order);
-            iterator = std::next(orders.begin(), orders.size() - 1);
+            ordersPtr = &bids_[order->GetPrice()];
         } else {
-            auto &orders = asks_[order->GetPrice()];
-            orders.push_back(order);
-            iterator = std::next(orders.begin(), orders.size() - 1);
+            ordersPtr = &asks_[order->GetPrice()];
         }
 
-        orders_.insert({order->GetOrderId(), OrderEntry{order, iterator}});
-        return MatchOrders();
+        ordersPtr->push_back(order);
+        orders_.insert({order->GetOrderId(), OrderEntry{order, ordersPtr->size() - 1}});
+
+        // Pass the IOC order's ID so MatchOrders can cancel the unfilled remainder
+        // directly, without scanning the entire book.
+        const bool isIoc = (order->GetOrderType() == OrderType::ImmediateOrCancel);
+        return MatchOrders(isIoc ? order->GetOrderId() : std::optional<OrderId>{});
     }
+
 
     void CancelOrder(OrderId orderId) {
         if (!orders_.contains(orderId)) return;
 
-        const auto &[order, orderIterator] = orders_.at(orderId);
+        // Copy the fields we need before erasing from orders_, since erasing
+        // destroys the OrderEntry and with it the shared_ptr keeping order alive.
+        const auto &entry = orders_.at(orderId);
+        const Side side = entry.order_->GetSide();
+        const Price price = entry.order_->GetPrice();
+        const std::size_t idx = entry.location_;
         orders_.erase(orderId);
 
-        if (order->GetSide() == Side::Sell) {
-            auto price = order->GetPrice();
-            auto &orders = asks_.at(price);
-            orders.erase(orderIterator);
+        auto &orders = (side == Side::Sell)
+            ? asks_.at(price)
+            : bids_.at(price);
+
+        // Swap-and-pop: move the last element into the cancelled slot, then
+        // pop the back. This is O(1) and keeps the vector contiguous.
+        // We must update the swapped order's stored index to reflect its new position.
+        if (idx != orders.size() - 1) {
+            orders[idx] = std::move(orders.back());
+            orders_.at(orders[idx]->GetOrderId()).location_ = idx;
+        }
+        orders.pop_back();
+
+        if (side == Side::Sell) {
             if (orders.empty()) asks_.erase(price);
         } else {
-            auto price = order->GetPrice();
-            auto &orders = bids_.at(price);
-            orders.erase(orderIterator);
             if (orders.empty()) bids_.erase(price);
         }
     }
@@ -405,9 +431,10 @@ public:
     // CheckAndResetDay() removed from hot path.
     Trades MatchOrder(OrderModify order) {
         if (!orders_.contains(order.GetOrderId())) return {};
-        const auto &[existingOrder, _] = orders_.at(order.GetOrderId());
+        // Copy the order type before CancelOrder erases the entry and destroys the shared_ptr.
+        const OrderType existingType = orders_.at(order.GetOrderId()).order_->GetOrderType();
         CancelOrder(order.GetOrderId());
-        return AddOrder(order.ToOrderPointer(existingOrder->GetOrderType()));
+        return AddOrder(order.ToOrderPointer(existingType));
     }
 
     std::size_t Size() const { return orders_.size(); }
