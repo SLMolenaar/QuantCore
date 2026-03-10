@@ -1,6 +1,6 @@
 # QuantCore
 
-![CI](https://github.com/SLMolenaar/quantcore/actions/workflows/coverage.yml/badge.svg)
+![Build](https://github.com/SLMolenaar/quantcore/actions/workflows/coverage.yml/badge.svg)
 ![Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)
 ![C++](https://img.shields.io/badge/C%2B%2B-20-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
