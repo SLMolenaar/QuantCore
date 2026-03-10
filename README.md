@@ -6,7 +6,7 @@ High-performance backtesting engine for trading strategies, written in C++20 wit
 
 ## Overview
 
-QuantCore is an event-driven backtester built around [my own limit order book](https://github.com/SLMolenaar/orderbook-simulator-cpp). It processes market events chronologically through a priority queue. No look-ahead bias, no shortcut assumptions about fill prices.
+QuantCore is an event-driven backtester built around an enhanced version of [my limit order book simulator](https://github.com/SLMolenaar/orderbook-simulator-cpp). It processes market events chronologically through a priority queue, ensuring no look-ahead bias and no unrealistic assumptions about fill prices.
 
 The C++ core handles all the performance-critical work: event dispatch, order matching, position tracking, and execution simulation. Python sits on top via pybind11 bindings and handles strategy development, parameter optimization, and visualization.
 
@@ -163,8 +163,8 @@ The engine is single-threaded. Measured on Windows (AMD/Intel, Release build, MS
 |---|---|---|
 | 1-year backtest (252 bars) | ~265 K bars/s | 0.95 ms |
 | 5-year backtest (1,260 bars) | ~270 K bars/s | 1.75 ms |
-| Order book — add + cancel | 12.9 M ops/s | — |
-| Order book — add + match | 4.9 M ops/s | — |
+| Order book: add + cancel | 12.9 M ops/s | n/a |
+| Order book: add + match  | 4.9 M ops/s  | n/a |
 
 All three 1-year latency checks pass the < 5ms target. The order book isolation numbers are the ceiling. The engine loop itself is the bottleneck at this scale, not the matching engine.
 

@@ -73,7 +73,7 @@ setup(
     name='quantcore',
     version=version,
     author='Stefaan Molenaar',
-    author_email='your.email@example.com',
+    author_email='StefaanLMolenaar@gmail.com',
     description='High-performance backtesting engine for trading strategies',
     long_description=long_description,
     long_description_content_type='text/markdown',
