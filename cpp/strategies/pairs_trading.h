@@ -56,22 +56,6 @@ public:
             return;
         }
 
-        if (!warning_issued_ && (symbol1_seen_ != symbol2_seen_)) {
-            // We've seen at least some bars, but only one symbol
-            // Check if we've waited long enough (more than lookback bars)
-            size_t bars_seen = symbol1_seen_ ?
-                spread_history_.size() : 0;
-            if (symbol2_seen_ && !symbol1_seen_) {
-                bars_seen = spread_history_.size();
-            }
-
-            // After a reasonable amount of data, warn if we're still missing a symbol
-            if (bars_seen == 0) {
-                // First bar - issue warning immediately if one symbol arrives but not both
-                // Wait for more data before warning
-            }
-        }
-
         if (price1_ == 0.0 || price2_ == 0.0) {
             if (!warning_issued_) {
                 bool one_seen  = symbol1_seen_ || symbol2_seen_;
