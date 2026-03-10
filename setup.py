@@ -58,19 +58,20 @@ class CMakeBuild(build_ext):
 
 here = Path(__file__).parent
 
-readme = here.parent / "README.md"
+readme = here / "README.md"
 long_description = readme.read_text(encoding="utf-8") if readme.exists() else ""
 
 setup(
     name="quantcore",
-    version="0.1.1",
+    version="0.1.2",
     author="Stefaan Molenaar",
     author_email="StefaanLMolenaar@gmail.com",
     description="High-performance C++20 backtesting engine with Python interface",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/SLMolenaar/quantcore",
-    packages=find_packages(),
+    packages=find_packages(where="python"),
+    package_dir={"": "python"},
     ext_modules=[CMakeExtension("quantcore._core", sourcedir=str(here))],
     cmdclass={"build_ext": CMakeBuild},
     install_requires=[

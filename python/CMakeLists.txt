@@ -41,7 +41,7 @@ execute_process(
 find_package(pybind11 REQUIRED HINTS ${pybind11_DIR})
 
 # Create the Python module
-pybind11_add_module(_core bindings.cpp)
+pybind11_add_module(_core ../bindings.cpp)
 
 # Include directories for C++ headers
 target_include_directories(_core PRIVATE
