@@ -414,6 +414,7 @@ private:
             ord->get_side(), px_cents, qty
         );
 
+        const double slippage_pct = engine->get_slippage_pct();
         auto trades = engine->execute_order(order);
         for (const auto& trade : trades) {
             // For a BUY order, we are the bid side
@@ -422,11 +423,16 @@ private:
                 ? trade.GetBidTrade()
                 : trade.GetAskTrade();
 
+            double raw_price = our_trade.price_ / 100.0;
+            double fill_price = (ord->get_side() == Side::Buy)
+                ? raw_price * (1.0 + slippage_pct)
+                : raw_price * (1.0 - slippage_pct);
+
             auto fill = make_event<FillEvent>(
                 ord->get_symbol(), ord->get_timestamp(),
                 ord->get_order_id(), ord->get_side(),
                 our_trade.quantity_,
-                our_trade.price_ / 100.0,
+                fill_price,
                 0.0
             );
             eq_.push(fill);

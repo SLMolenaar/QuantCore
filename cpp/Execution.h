@@ -97,6 +97,7 @@ public:
     double get_realized_pnl()   const { return realized_pnl_; }
     double get_total_fees()     const { return total_fees_; }
     int64_t get_latency_ns()    const { return config_.latency_ns; }
+    double get_slippage_pct()   const { return config_.slippage_pct; }
 
     double get_unrealized_pnl() const {
         double position = get_position();
