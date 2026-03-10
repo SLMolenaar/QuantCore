@@ -5,77 +5,53 @@ on:
     types: [published]
 
 jobs:
-  build_linux:
-    runs-on: ubuntu-latest
-    container: quay.io/pypa/manylinux_2_28_x86_64
+  build_wheels:
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python: ["cp39-cp39", "cp310-cp310", "cp311-cp311", "cp312-cp312"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and repair wheel
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Cache cibuildwheel tools
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cibw-cache
+          key: cibw-cache-${{ runner.os }}-20271
+
+      - name: Pre-download virtualenv
+        if: runner.os != 'Linux'
+        shell: bash
         run: |
-          PYBIN="/opt/python/${{ matrix.python }}/bin"
-          "$PYBIN/pip" install scikit-build-core pybind11 build
-          "$PYBIN/python" -m build --wheel --outdir /tmp/built_wheel .
-          auditwheel repair /tmp/built_wheel/*.whl --wheel-dir wheelhouse/
+          mkdir -p "${{ runner.temp }}/cibw-cache"
+          DEST="${{ runner.temp }}/cibw-cache/virtualenv-20.27.1.pyz"
+          if [ ! -f "$DEST" ]; then
+            curl -fsSL "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true" -o "$DEST"
+          fi
+
+      - uses: pypa/cibuildwheel@v2.22
+        with:
+          output-dir: wheelhouse
+        env:
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-*"
+          CIBW_SKIP: "*-win32 *-manylinux_i686"
+          CIBW_BUILD_FRONTEND: "build[uv]"
+          CIBW_BEFORE_BUILD_LINUX: "pip install pybind11"
+          CIBW_MANYLINUX_X86_64_IMAGE: "quay.io/pypa/manylinux_2_28_x86_64"
+          CIBW_CACHE_PATH: ${{ runner.temp }}/cibw-cache
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: wheels-linux-${{ matrix.python }}
-          path: wheelhouse/*.whl
-
-  build_macos:
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        python: ["3.9", "3.10", "3.11", "3.12"]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-
-      - name: Build wheel
-        run: |
-          pip install scikit-build-core pybind11 build
-          python -m build --wheel --outdir wheelhouse/ .
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos-${{ matrix.python }}
-          path: wheelhouse/*.whl
-
-  build_windows:
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        python: ["3.9", "3.10", "3.11", "3.12"]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-
-      - name: Build wheel
-        run: |
-          pip install scikit-build-core pybind11 build
-          python -m build --wheel --outdir wheelhouse/ .
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-windows-${{ matrix.python }}
+          name: wheels-${{ matrix.os }}
           path: wheelhouse/*.whl
 
   publish:
-    needs: [build_linux, build_macos, build_windows]
-    if: always()
+    needs: build_wheels
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
