@@ -1,3 +1,43 @@
 [build-system]
-requires = ["setuptools>=64", "pybind11>=2.10", "cmake>=3.15"]
-build-backend = "setuptools.build_meta"
+requires = ["scikit-build-core>=0.9", "pybind11>=2.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "quantcore"
+version = "0.1.5"
+description = "High-performance C++20 backtesting engine with Python interface"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Stefaan Molenaar", email = "StefaanLMolenaar@gmail.com" }]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+]
+keywords = ["trading", "backtesting", "algorithmic-trading", "quantitative-finance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Developers",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: C++",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
+viz = ["matplotlib>=3.7.0", "seaborn>=0.12.0"]
+
+[project.urls]
+Homepage = "https://github.com/SLMolenaar/quantcore"
+"Bug Reports" = "https://github.com/SLMolenaar/quantcore/issues"
+Source = "https://github.com/SLMolenaar/quantcore"
+
+[tool.scikit-build]
+cmake.build-type = "Release"
+wheel.packages = ["python/quantcore"]
