@@ -82,6 +82,9 @@ if(BUILD_TESTS)
                 ${PROJECT_SOURCE_DIR}/cpp/orderbook
         )
 
+        target_compile_options(quantcore_tests PRIVATE --coverage)
+        target_link_options(quantcore_tests PRIVATE --coverage)
+
         include(GoogleTest)
         gtest_discover_tests(quantcore_tests)
     endif()
