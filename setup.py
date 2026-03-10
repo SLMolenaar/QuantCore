@@ -76,7 +76,7 @@ long_description = readme.read_text(encoding="utf-8") if readme.exists() else ""
 
 setup(
     name="quantcore",
-    version="0.1.3",
+    version="0.1.4",
     author="Stefaan Molenaar",
     author_email="StefaanLMolenaar@gmail.com",
     description="High-performance C++20 backtesting engine with Python interface",

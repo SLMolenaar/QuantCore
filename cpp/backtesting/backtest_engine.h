@@ -49,6 +49,12 @@ public:
         risk_mgr_->set_capital(initial_capital, initial_capital);
     }
 
+    BacktestEngine(double initial_capital, ExecutionConfig exec_config)
+        : BacktestEngine(initial_capital)
+    {
+        exec_config_ = exec_config;
+    }
+
     void add_data(const std::string& symbol, const BarSeries& bars) {
         if (bars.empty()) {
             throw std::invalid_argument("Cannot add empty bar series");
@@ -126,11 +132,11 @@ public:
             }
         }
         if (first_bar_timestamp_ == std::numeric_limits<int64_t>::max()) {
-            first_bar_timestamp_ = 0;  // Fallback if no data
+            first_bar_timestamp_ = 0;
         }
 
         for (const auto& [symbol, bars] : data_) {
-            engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol);
+            engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
             mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
             price_history_[symbol] = std::deque<double>();
         }
@@ -188,7 +194,6 @@ private:
     std::pmr::unsynchronized_pool_resource order_pool_;
     std::pmr::unsynchronized_pool_resource event_pool_;
 
-    // Now declare objects that allocate from the pools above.
     EventQueue                eq_;
     std::shared_ptr<Strategy> strat_;
 
@@ -213,12 +218,12 @@ private:
     double   mm_spread_;
     Quantity mm_depth_;
 
-    double default_volatility_;
-    double default_stop_distance_;
-    size_t volatility_lookback_;
-    size_t bars_per_year_;
-
-    int64_t first_bar_timestamp_;
+    double          default_volatility_;
+    double          default_stop_distance_;
+    size_t          volatility_lookback_;
+    size_t          bars_per_year_;
+    int64_t         first_bar_timestamp_;
+    ExecutionConfig exec_config_;
 
     static constexpr size_t PRICE_HISTORY_BUFFER = 10;
 
@@ -249,9 +254,8 @@ private:
         }
 
         double total_equity = init_cap_ + get_total_pnl();
-        curr_cap_ = total_equity;  // For position sizing calculations
+        curr_cap_ = total_equity;
 
-        // Calculate actual liquid cash (equity minus position notional values)
         double total_position_value = 0.0;
         for (const auto& [symbol, engine] : engines_) {
             double pos = engine->get_position();
@@ -317,7 +321,6 @@ private:
     void handle_sig(EventPtr event) {
         auto sig = std::static_pointer_cast<SignalEvent>(event);
 
-        // HOLD means do nothing — no order should be generated.
         if (sig->get_signal_type() == SignalType::HOLD) return;
 
         auto px_it = last_px_.find(sig->get_symbol());
@@ -338,16 +341,12 @@ private:
 
         double curr_pos = ee_it->second->get_position();
 
-        // Use the live portfolio value (updated after every bar) so that
-        // position sizing reflects current equity, not the starting capital.
         double portfolio_val = curr_cap_;
         double portfolio_vol = calculate_volatility(sig->get_symbol());
 
         double target_pos = 0.0;
 
         if (sig->get_signal_type() == SignalType::BUY) {
-            // Pass actual current_position instead of hardcoded 0.0
-            // This allows position sizers to make informed decisions based on existing holdings.
             PositionSizingContext ctx(
                 strength, portfolio_val, curr_px,
                 curr_pos,
@@ -417,8 +416,6 @@ private:
         const double slippage_pct = engine->get_slippage_pct();
         auto trades = engine->execute_order(order);
         for (const auto& trade : trades) {
-            // For a BUY order, we are the bid side
-            // For a SELL order, we are the ask side
             const TradeInfo& our_trade = (ord->get_side() == Side::Buy)
                 ? trade.GetBidTrade()
                 : trade.GetAskTrade();
@@ -445,8 +442,6 @@ private:
         if (ee_it != engines_.end()) {
             double new_pos = ee_it->second->get_position();
             strat_->set_position(fill->get_symbol(), new_pos);
-            // Pass fill price so the risk manager can maintain accurate
-            // notional exposure across all positions.
             risk_mgr_->set_position(fill->get_symbol(), new_pos, fill->get_price());
         }
         strat_->on_fill(*fill);

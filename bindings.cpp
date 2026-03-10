@@ -221,7 +221,11 @@ PYBIND11_MODULE(_core, m) {
     // ============================================================================
 
     py::class_<BacktestEngine>(m, "BacktestEngine")
-        .def(py::init<double>(), py::arg("initial_capital") = 100000.0)
+        .def(py::init<double>(),
+             py::arg("initial_capital") = 100000.0)
+        .def(py::init<double, ExecutionConfig>(),
+             py::arg("initial_capital") = 100000.0,
+             py::arg("exec_config") = ExecutionConfig())
 
         // List[BarData] overload — kept for backward compatibility.
         .def("add_data", &BacktestEngine::add_data,
