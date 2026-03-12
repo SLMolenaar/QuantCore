@@ -192,6 +192,12 @@ public:
     std::vector<int64_t> get_timestamps()   const { return timestamps_; }
 
 private:
+    // Declared first → destroyed last. All objects allocated from these pools
+    // (Orders held in Orderbooks, events in eq_) must be destroyed before the
+    // pools themselves, which is guaranteed by this declaration order.
+    std::pmr::unsynchronized_pool_resource order_pool_;
+    std::pmr::unsynchronized_pool_resource event_pool_;
+
     EventQueue                eq_;
     std::shared_ptr<Strategy> strat_;
 
@@ -222,13 +228,6 @@ private:
     size_t          bars_per_year_;
     int64_t         first_bar_timestamp_;
     ExecutionConfig exec_config_;
-
-    // Pools are declared last so they are destroyed after all objects that were
-    // allocated from them. C++ destructs members in reverse declaration order,
-    // so placing the pools here guarantees their lifetime exceeds that of eq_,
-    // mms_, and any shared_ptr events still held at destruction time.
-    std::pmr::unsynchronized_pool_resource order_pool_;
-    std::pmr::unsynchronized_pool_resource event_pool_;
 
     static constexpr size_t PRICE_HISTORY_BUFFER = 10;
 
