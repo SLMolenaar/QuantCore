@@ -12,12 +12,12 @@ endif()
 # Compiler-specific warning flags
 if(MSVC)
     add_compile_options(/W4)
-    add_compile_options($<$<CONFIG:Release>:/O2 /DNDEBUG>)
-    add_compile_options($<$<CONFIG:Debug>:/Od /Zi>)
+    add_compile_options($<$<CONFIG:Release>:/O2> $<$<CONFIG:Release>:/DNDEBUG>)
+    add_compile_options($<$<CONFIG:Debug>:/Od> $<$<CONFIG:Debug>:/Zi>)
 else()
     add_compile_options(-Wall -Wextra)
-    add_compile_options($<$<CONFIG:Release>:-O3 -DNDEBUG>)
-    add_compile_options($<$<CONFIG:Debug>:-g -O0>)
+    add_compile_options($<$<CONFIG:Release>:-O3> $<$<CONFIG:Release>:-DNDEBUG>)
+    add_compile_options($<$<CONFIG:Debug>:-g> $<$<CONFIG:Debug>:-O0>)
 endif()
 
 option(BUILD_TESTS "Build tests" ON)
@@ -93,8 +93,10 @@ if(BUILD_BENCHMARKS)
     )
 
     target_compile_options(bench_backtest_engine PRIVATE
-            $<$<CXX_COMPILER_ID:MSVC>:/O2 /DNDEBUG>
-            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O3 -DNDEBUG>
+            $<$<CXX_COMPILER_ID:MSVC>:/O2>
+            $<$<CXX_COMPILER_ID:MSVC>:/DNDEBUG>
+            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O3>
+            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-DNDEBUG>
     )
 
     message(STATUS "Build benchmarks: ON")
