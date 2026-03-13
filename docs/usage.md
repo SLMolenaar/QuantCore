@@ -2,7 +2,7 @@
 
 This document covers everything you can do with QuantCore's Python interface. It assumes you have built the C++ extension and can `import quantcore as qc`. See the README for build instructions.
 
----
+--- 
 
 ## Table of Contents
 
@@ -130,8 +130,10 @@ has_pos  = self.has_position(symbol)  # bool, True if abs(position) > 0
 ### Accessing portfolio state
 
 ```python
-capital = self.get_capital()          # current cash
-equity  = self.get_equity()           # cash + mark-to-market positions
+portfolio = self.get_portfolio()  # PortfolioContext, or None if not yet attached
+if portfolio:
+    cash  = portfolio.get_cash()
+    value = portfolio.get_portfolio_value()
 ```
 
 ### A complete example
@@ -139,18 +141,18 @@ equity  = self.get_equity()           # cash + mark-to-market positions
 ```python
 class ZScoreMeanReversion(qc.Strategy):
     def __init__(self, lookback: int = 20, entry_z: float = 1.5, exit_z: float = 0.5):
-        super().__init__()
+        super().__init__("ZScoreMeanReversion")
         self.lookback = lookback
         self.entry_z  = entry_z
         self.exit_z   = exit_z
         self._prices  = {}
 
     def on_data(self, event):
-        sym = event.symbol
+        sym = event.get_symbol()
         if sym not in self._prices:
             self._prices[sym] = []
 
-        self._prices[sym].append(event.close)
+        self._prices[sym].append(event.get_close())
         if len(self._prices[sym]) > self.lookback:
             self._prices[sym].pop(0)
 
@@ -164,17 +166,17 @@ class ZScoreMeanReversion(qc.Strategy):
         if std == 0:
             return
 
-        z_score  = (event.close - mean) / std
+        z_score  = (event.get_close() - mean) / std
         position = self.get_position(sym)
 
         if z_score < -self.entry_z and position == 0:
-            self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.timestamp_ns)
+            self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.get_timestamp())
         elif z_score > self.entry_z and position == 0:
-            self.generate_signal(sym, qc.SignalType.SELL, 1.0, event.timestamp_ns)
+            self.generate_signal(sym, qc.SignalType.SELL, 1.0, event.get_timestamp())
         elif position > 0 and z_score > -self.exit_z:
-            self.generate_signal(sym, qc.SignalType.SELL, 1.0, event.timestamp_ns)
+            self.generate_signal(sym, qc.SignalType.SELL, 1.0, event.get_timestamp())
         elif position < 0 and z_score < self.exit_z:
-            self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.timestamp_ns)
+            self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.get_timestamp())
 ```
 
 ### Using signal strength
@@ -183,10 +185,10 @@ Signal strength scales the position size calculated by the position sizer. A str
 
 ```python
 # Full conviction
-self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.timestamp_ns)
+self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.get_timestamp())
 
 # Half size (e.g., lower confidence)
-self.generate_signal(sym, qc.SignalType.BUY, 0.5, event.timestamp_ns)
+self.generate_signal(sym, qc.SignalType.BUY, 0.5, event.get_timestamp())
 ```
 
 ---
@@ -554,10 +556,11 @@ returns = calculate_returns(equity)
 
 ### calculate_all_metrics
 
-Returns a formatted string with the full metrics summary:
+Returns a `PerformanceMetrics` dataclass with all metrics populated. Printing it gives a formatted summary:
 
 ```python
-print(calculate_all_metrics(equity))
+metrics = calculate_all_metrics(equity)
+print(metrics)
 # Total Return:     24.31%
 # Annualized:       11.82%
 # Sharpe Ratio:     1.43
@@ -566,10 +569,19 @@ print(calculate_all_metrics(equity))
 # Max Drawdown:     -8.74%
 # Win Rate:         58.3%
 # Profit Factor:    1.82
-# Avg Win:          1.24%
-# Avg Loss:         -0.68%
-# Largest Win:      3.41%
-# Largest Loss:     -1.87%
+# Avg Win:          $124.00
+# Avg Loss:         $-68.00
+# Largest Win:      $341.00
+# Largest Loss:     $-187.00
+```
+
+To include trade-level metrics, pass a list of per-trade PnL values:
+
+```python
+metrics = calculate_all_metrics(equity, trade_pnls=[100.0, -50.0, 200.0])
+print(metrics.total_trades)   # 3
+print(metrics.win_rate)       # float, 0–100
+print(metrics.profit_factor)  # float
 ```
 
 ### Individual metric functions
@@ -577,23 +589,26 @@ print(calculate_all_metrics(equity))
 ```python
 from quantcore.analytics import (
     calculate_total_return,
-    calculate_cagr,
+    calculate_annualized_return,
     calculate_sharpe_ratio,
     calculate_sortino_ratio,
-    calculate_calmar_ratio,
+    calculate_volatility,
     calculate_max_drawdown,
-    calculate_win_rate,
-    calculate_profit_factor,
+    calculate_calmar_ratio,
+    analyze_trades,
 )
 
-total_return = calculate_total_return(equity)     # float, e.g. 0.2431
-cagr         = calculate_cagr(equity)             # float, annualized
-sharpe       = calculate_sharpe_ratio(returns)    # float
-sortino      = calculate_sortino_ratio(returns)   # float
-calmar       = calculate_calmar_ratio(equity)     # float
-max_dd       = calculate_max_drawdown(equity)     # float, negative, e.g. -0.0874
-win_rate     = calculate_win_rate(returns)        # float, 0–1
-pf           = calculate_profit_factor(returns)   # float
+total_return = calculate_total_return(equity)                        # float, %
+ann_ret      = calculate_annualized_return(equity, periods_per_year=252)  # float, %
+sharpe       = calculate_sharpe_ratio(returns)                       # float
+sortino      = calculate_sortino_ratio(returns)                      # float
+vol          = calculate_volatility(returns, periods_per_year=252)   # float, %
+max_dd, dur  = calculate_max_drawdown(equity)                        # (float %, int bars)
+calmar       = calculate_calmar_ratio(ann_ret, max_dd)               # float
+
+trade_stats  = analyze_trades([100.0, -50.0, 200.0, -30.0, 80.0])
+# dict with keys: total_trades, win_rate, profit_factor,
+#                 avg_win, avg_loss, largest_win, largest_loss
 ```
 
 ### Rolling metrics
@@ -775,11 +790,11 @@ Statistical arbitrage on two correlated assets. Monitors the spread, buys the un
 
 ```python
 strategy = qc.PairsTrading(
-    symbol_a='AAPL',
-    symbol_b='MSFT',
+    symbol1='AAPL',
+    symbol2='MSFT',
     lookback=60,
-    entry_threshold=2.0,
-    exit_threshold=0.5
+    entry_zscore=2.0,
+    exit_zscore=0.5
 )
 ```
 
@@ -803,15 +818,15 @@ results = qc.run_backtest(
 )
 ```
 
-Inside the strategy, `event.symbol` tells you which asset triggered the call:
+Inside the strategy, `event.get_symbol()` tells you which asset triggered the call:
 
 ```python
 class MultiAssetStrategy(qc.Strategy):
     def on_data(self, event):
-        if event.symbol == 'AAPL':
+        if event.get_symbol() == 'AAPL':
             # AAPL-specific logic
             pass
-        elif event.symbol == 'GOOGL':
+        elif event.get_symbol() == 'GOOGL':
             # GOOGL-specific logic
             pass
 ```
@@ -880,8 +895,8 @@ def run_single(params):
 
 param_grid = [
     (f, s) for f in [10, 20, 50]
-            for s in [100, 150, 200]
-            if f < s
+    for s in [100, 150, 200]
+    if f < s
 ]
 
 with Pool() as pool:
