@@ -31,6 +31,7 @@ public:
         : init_cap_(initial_capital)
         , curr_cap_(initial_capital)
         , next_oid_(1)
+        , halted_(false)
         , sizer_(std::make_shared<FixedPercentage>(0.1))
         , risk_mgr_(std::make_shared<RiskManager>())
         , portfolio_(std::make_shared<PortfolioContext>(initial_capital))
@@ -43,9 +44,8 @@ public:
         , bars_per_year_(252)
         , first_bar_timestamp_(0)
     {
-        if (initial_capital <= 0.0) {
+        if (initial_capital <= 0.0)
             throw std::invalid_argument("Initial capital must be positive");
-        }
         risk_mgr_->set_capital(initial_capital, initial_capital);
     }
 
@@ -56,27 +56,24 @@ public:
     }
 
     void add_data(const std::string& symbol, const BarSeries& bars) {
-        if (bars.empty()) {
+        if (bars.empty())
             throw std::invalid_argument("Cannot add empty bar series");
-        }
-        data_[symbol] = bars;
+        data_[symbol]          = bars;
         engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
         mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
         price_history_[symbol] = std::deque<double>();
     }
 
     void set_strategy(std::shared_ptr<Strategy> strat) {
-        if (!strat) {
+        if (!strat)
             throw std::invalid_argument("Strategy cannot be null");
-        }
         strat_ = strat;
         strat_->portfolio_ = portfolio_.get();
     }
 
     void set_position_sizer(PositionSizerPtr sizer) {
-        if (!sizer) {
+        if (!sizer)
             throw std::invalid_argument("Position sizer cannot be null");
-        }
         sizer_ = sizer;
     }
 
@@ -115,6 +112,7 @@ public:
         last_px_.clear();
         curr_cap_ = init_cap_;
         next_oid_ = 1;
+        halted_   = false;
         strat_->reset();
         risk_mgr_->reset();
         risk_mgr_->set_capital(init_cap_, init_cap_);
@@ -125,7 +123,6 @@ public:
         equity_.clear();
         timestamps_.clear();
 
-        // Re-initialize engines and market makers to reset accumulated state between runs.
         for (const auto& [symbol, bars] : data_) {
             engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
             mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
@@ -134,13 +131,11 @@ public:
 
         first_bar_timestamp_ = std::numeric_limits<int64_t>::max();
         for (const auto& [symbol, bars] : data_) {
-            if (!bars.empty() && bars.front().timestamp_ns < first_bar_timestamp_) {
+            if (!bars.empty() && bars.front().timestamp_ns < first_bar_timestamp_)
                 first_bar_timestamp_ = bars.front().timestamp_ns;
-            }
         }
-        if (first_bar_timestamp_ == std::numeric_limits<int64_t>::max()) {
+        if (first_bar_timestamp_ == std::numeric_limits<int64_t>::max())
             first_bar_timestamp_ = 0;
-        }
 
         load_data();
 
@@ -163,6 +158,9 @@ public:
                 equity_.push_back(port_val);
                 timestamps_.push_back(event->get_timestamp());
                 risk_mgr_->set_capital(init_cap_, port_val);
+
+                if (should_halt())
+                    flatten_all_positions(event->get_timestamp());
             }
         }
 
@@ -181,6 +179,14 @@ public:
         return total;
     }
 
+    std::vector<double> get_trade_pnls() const {
+        std::vector<double> pnls;
+        for (const auto& [sym, ee] : engines_)
+            for (double p : ee->get_closed_trade_pnls())
+                pnls.push_back(p);
+        return pnls;
+    }
+
     std::shared_ptr<ExecutionEngine> get_execution_engine(const std::string& symbol) const {
         auto it = engines_.find(symbol);
         return it != engines_.end() ? it->second : nullptr;
@@ -192,9 +198,8 @@ public:
     std::vector<int64_t> get_timestamps()   const { return timestamps_; }
 
 private:
-    // Declared first → destroyed last. All objects allocated from these pools
-    // (Orders held in Orderbooks, events in eq_) must be destroyed before the
-    // pools themselves, which is guaranteed by this declaration order.
+    // Pools are declared first so they are destroyed last. C++ destructs members
+    // in reverse declaration order; pools must outlive all objects allocated from them.
     std::pmr::unsynchronized_pool_resource order_pool_;
     std::pmr::unsynchronized_pool_resource event_pool_;
 
@@ -210,6 +215,7 @@ private:
     double   init_cap_;
     double   curr_cap_;
     uint64_t next_oid_;
+    bool     halted_;
 
     PositionSizerPtr              sizer_;
     std::shared_ptr<RiskManager>  risk_mgr_;
@@ -250,12 +256,10 @@ private:
     }
 
     void update_portfolio() {
-        for (const auto& [symbol, price] : last_px_) {
+        for (const auto& [symbol, price] : last_px_)
             portfolio_->update_price(symbol, price);
-        }
-        for (const auto& [symbol, engine] : engines_) {
+        for (const auto& [symbol, engine] : engines_)
             portfolio_->update_position(symbol, engine->get_position());
-        }
 
         double total_equity = init_cap_ + get_total_pnl();
         curr_cap_ = total_equity;
@@ -264,12 +268,10 @@ private:
         for (const auto& [symbol, engine] : engines_) {
             double pos = engine->get_position();
             auto px_it = last_px_.find(symbol);
-            if (px_it != last_px_.end() && pos != 0.0) {
+            if (px_it != last_px_.end() && pos != 0.0)
                 total_position_value += std::abs(pos * px_it->second);
-            }
         }
-        double liquid_cash = total_equity - total_position_value;
-        portfolio_->set_cash(liquid_cash);
+        portfolio_->set_cash(total_equity - total_position_value);
     }
 
     double calculate_volatility(const std::string& symbol) const {
@@ -282,7 +284,6 @@ private:
 
         std::vector<double> returns;
         returns.reserve(n - 1);
-
         size_t start_idx = prices.size() - n;
         for (size_t i = start_idx + 1; i < prices.size(); ++i) {
             if (prices[i-1] <= 0.0 || prices[i] <= 0.0) continue;
@@ -294,15 +295,37 @@ private:
         double mean   = std::accumulate(returns.begin(), returns.end(), 0.0) / returns.size();
         double sq_sum = 0.0;
         for (double r : returns) sq_sum += (r - mean) * (r - mean);
-        double vol = std::sqrt(sq_sum / returns.size());
-
-        vol *= std::sqrt(static_cast<double>(bars_per_year_));
+        double vol = std::sqrt(sq_sum / returns.size()) * std::sqrt(static_cast<double>(bars_per_year_));
         return std::max(0.001, std::min(1.0, vol));
     }
 
+    bool should_halt() const {
+        if (halted_) return false;
+        const auto& limits = risk_mgr_->get_limits();
+        if (!limits.enabled || limits.max_loss_pct <= 0.0) return false;
+        return (init_cap_ - curr_cap_) / init_cap_ > limits.max_loss_pct;
+    }
+
+    void flatten_all_positions(int64_t timestamp) {
+        halted_ = true;
+        for (const auto& [symbol, ee] : engines_) {
+            double pos = ee->get_position();
+            if (std::abs(pos) < 1.0) continue;
+            auto px_it = last_px_.find(symbol);
+            if (px_it == last_px_.end()) continue;
+            Side side = (pos > 0) ? Side::Sell : Side::Buy;
+            auto ord  = make_event<OrderEvent>(
+                symbol, timestamp, side, OrderType::GoodTillCancel,
+                std::abs(pos), px_it->second
+            );
+            ord->set_order_id(next_oid_++);
+            eq_.push(ord);
+        }
+    }
+
     void handle_md(EventPtr event) {
-        auto md     = std::static_pointer_cast<MarketDataEvent>(event);
-        auto symbol = md->get_symbol();
+        auto md      = std::static_pointer_cast<MarketDataEvent>(event);
+        auto symbol  = md->get_symbol();
         double price = md->get_close();
         last_px_[symbol] = price;
 
@@ -313,9 +336,8 @@ private:
         auto ee_it = engines_.find(symbol);
         if (ee_it != engines_.end()) {
             auto mm_it = mms_.find(symbol);
-            if (mm_it != mms_.end()) {
+            if (mm_it != mms_.end())
                 mm_it->second->update_quotes(*ee_it->second, *md);
-            }
         }
 
         strat_->on_data(*md);
@@ -323,6 +345,8 @@ private:
     }
 
     void handle_sig(EventPtr event) {
+        if (halted_) return;
+
         auto sig = std::static_pointer_cast<SignalEvent>(event);
 
         if (sig->get_signal_type() == SignalType::HOLD) return;
@@ -343,26 +367,18 @@ private:
         auto ee_it = engines_.find(sig->get_symbol());
         if (ee_it == engines_.end()) return;
 
-        double curr_pos = ee_it->second->get_position();
-
-        double portfolio_val = curr_cap_;
+        double curr_pos     = ee_it->second->get_position();
         double portfolio_vol = calculate_volatility(sig->get_symbol());
 
         double target_pos = 0.0;
 
         if (sig->get_signal_type() == SignalType::BUY) {
-            PositionSizingContext ctx(
-                strength, portfolio_val, curr_px,
-                curr_pos,
-                portfolio_vol, default_stop_distance_
-            );
+            PositionSizingContext ctx(strength, curr_cap_, curr_px, curr_pos,
+                                      portfolio_vol, default_stop_distance_);
             target_pos = sizer_->calculate_size(ctx);
         } else if (sig->get_signal_type() == SignalType::SELL) {
-            PositionSizingContext ctx(
-                strength, portfolio_val, curr_px,
-                curr_pos,
-                portfolio_vol, default_stop_distance_
-            );
+            PositionSizingContext ctx(strength, curr_cap_, curr_px, curr_pos,
+                                      portfolio_vol, default_stop_distance_);
             target_pos = -sizer_->calculate_size(ctx);
         } else {
             return;
@@ -374,8 +390,8 @@ private:
         Side   ord_side = (delta > 0.0) ? Side::Buy : Side::Sell;
         double ord_qty  = std::abs(delta);
 
-        double spread  = mm_spread_;
-        auto   mm_it   = mms_.find(sig->get_symbol());
+        double spread = mm_spread_;
+        auto   mm_it  = mms_.find(sig->get_symbol());
         if (mm_it != mms_.end()) spread = mm_it->second->get_spread();
 
         double ord_px = (ord_side == Side::Buy)
@@ -399,9 +415,8 @@ private:
     void handle_ord(EventPtr event) {
         auto ord = std::static_pointer_cast<OrderEvent>(event);
         auto it  = engines_.find(ord->get_symbol());
-        if (it == engines_.end()) {
+        if (it == engines_.end())
             throw std::runtime_error("No execution engine for symbol: " + ord->get_symbol());
-        }
 
         auto engine = it->second;
         if (ord->is_cancel()) {
@@ -424,7 +439,7 @@ private:
                 ? trade.GetBidTrade()
                 : trade.GetAskTrade();
 
-            double raw_price = our_trade.price_ / 100.0;
+            double raw_price  = our_trade.price_ / 100.0;
             double fill_price = (ord->get_side() == Side::Buy)
                 ? raw_price * (1.0 + slippage_pct)
                 : raw_price * (1.0 - slippage_pct);
@@ -441,8 +456,8 @@ private:
     }
 
     void handle_fill(EventPtr event) {
-        auto fill   = std::static_pointer_cast<FillEvent>(event);
-        auto ee_it  = engines_.find(fill->get_symbol());
+        auto fill  = std::static_pointer_cast<FillEvent>(event);
+        auto ee_it = engines_.find(fill->get_symbol());
         if (ee_it != engines_.end()) {
             double new_pos = ee_it->second->get_position();
             strat_->set_position(fill->get_symbol(), new_pos);

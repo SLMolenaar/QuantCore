@@ -37,9 +37,9 @@ FillEvent       = _core.FillEvent
 ExecutionConfig = _core.ExecutionConfig
 ExecutionEngine = _core.ExecutionEngine
 
-Strategy     = _core.Strategy
-BuyAndHold   = _core.BuyAndHold
-SMACrossover = _core.SMACrossover
+Strategy      = _core.Strategy
+BuyAndHold    = _core.BuyAndHold
+SMACrossover  = _core.SMACrossover
 MeanReversion = _core.MeanReversion
 PairsTrading  = _core.PairsTrading
 
@@ -47,13 +47,13 @@ BacktestEngine = _core.BacktestEngine
 
 PositionSizingContext = _core.PositionSizingContext
 # PositionSizer is the C++ abstract base class used by BacktestEngine.
-PositionSizer         = _core.PositionSizer
-FixedPercentage       = _core.FixedPercentage
-RiskBased             = _core.RiskBased
-KellyCriterion        = _core.KellyCriterion
-EqualWeight           = _core.EqualWeight
-VolatilityTargeting   = _core.VolatilityTargeting
-FixedShares           = _core.FixedShares
+PositionSizer       = _core.PositionSizer
+FixedPercentage     = _core.FixedPercentage
+RiskBased           = _core.RiskBased
+KellyCriterion      = _core.KellyCriterion
+EqualWeight         = _core.EqualWeight
+VolatilityTargeting = _core.VolatilityTargeting
+FixedShares         = _core.FixedShares
 
 RiskCheckResult   = _core.RiskCheckResult
 RiskCheckResponse = _core.RiskCheckResponse
@@ -74,6 +74,7 @@ version = _core.version
 # hierarchy that BacktestEngine uses internally.
 from .position_sizing import PositionCalculator, PortfolioPositionSizer
 from .parquet_loader import ParquetDataLoader
+
 
 def load_parquet_data(
         filepath: str,
@@ -144,9 +145,9 @@ def run_backtest(
     """
     Run a complete backtest and return a results dictionary containing:
     strategy, initial_capital, final_value, total_pnl, total_fees,
-    return_pct, equity_curve, timestamps.
+    return_pct, equity_curve, timestamps, trade_pnls.
     """
-    engine     = create_backtest(initial_capital, data, strategy)
+    engine      = create_backtest(initial_capital, data, strategy)
     final_value = engine.run()
 
     return {
@@ -158,6 +159,7 @@ def run_backtest(
         'return_pct':      (final_value / initial_capital - 1.0) * 100.0,
         'equity_curve':    engine.get_equity_curve(),
         'timestamps':      engine.get_timestamps(),
+        'trade_pnls':      engine.get_trade_pnls(),
     }
 
 
@@ -173,6 +175,7 @@ class BacktestResults:
         self.return_pct      = results.get('return_pct', 0.0)
         self.equity_curve    = results.get('equity_curve', [])
         self.timestamps      = results.get('timestamps', [])
+        self.trade_pnls      = results.get('trade_pnls', [])
         self._metrics        = None
 
     @property
@@ -183,7 +186,10 @@ class BacktestResults:
         """Compute and cache performance metrics. Returns self for chaining."""
         from .analytics import calculate_all_metrics
         import numpy as np
-        self._metrics = calculate_all_metrics(np.array(self.equity_curve))
+        self._metrics = calculate_all_metrics(
+            np.array(self.equity_curve),
+            trade_pnls=self.trade_pnls if self.trade_pnls else None,
+        )
         return self
 
     @property
@@ -234,7 +240,7 @@ __all__ = [
     'PositionCalculator', 'PortfolioPositionSizer',
     # Risk management
     'RiskCheckResult', 'RiskCheckResponse', 'RiskLimits', 'RiskManager',
-    # Portfolio context (FIX #6: was missing)
+    # Portfolio context
     'PortfolioContext',
     # Utilities
     'hello', 'version',

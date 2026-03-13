@@ -189,6 +189,7 @@ PYBIND11_MODULE(_core, m) {
         .def("get_best_bid",       &ExecutionEngine::get_best_bid)
         .def("get_best_ask",       &ExecutionEngine::get_best_ask)
         .def("get_mid_price",      &ExecutionEngine::get_mid_price)
+        .def("get_closed_trade_pnls",   &ExecutionEngine::get_closed_trade_pnls)
         .def("reset",              &ExecutionEngine::reset);
 
     // ============================================================================
@@ -285,6 +286,7 @@ PYBIND11_MODULE(_core, m) {
         .def("run",                  &BacktestEngine::run)
         .def("get_total_pnl",        &BacktestEngine::get_total_pnl)
         .def("get_total_fees",       &BacktestEngine::get_total_fees)
+        .def("get_trade_pnls",        &BacktestEngine::get_trade_pnls)
         .def("get_execution_engine", &BacktestEngine::get_execution_engine, py::arg("symbol"))
         .def("set_position_sizer",   &BacktestEngine::set_position_sizer,  py::arg("sizer"))
         .def("get_position_sizer",   &BacktestEngine::get_position_sizer)

@@ -8,7 +8,7 @@
 #include <map>
 #include <string>
 #include <memory>
-#include <chrono>
+#include <vector>
 #include <unordered_map>
 #include <stdexcept>
 #include <optional>
@@ -19,8 +19,6 @@ namespace defaults {
     constexpr double  MAKER_FEE    = 0.0001;
     constexpr double  TAKER_FEE    = 0.0002;
     constexpr int64_t LATENCY_NS   = 1000000;
-    // Slippage is disabled by default so that backtests produce deterministic
-    // results unless the caller explicitly opts in via ExecutionConfig.
     constexpr double  SLIPPAGE_PCT = 0.0;
 }
 
@@ -31,8 +29,6 @@ struct ExecutionConfig {
     double   slippage_pct = defaults::SLIPPAGE_PCT;
 };
 
-// Wraps an orderbook with backtesting execution features: fee accounting,
-// position tracking, slippage, latency, and PnL calculation.
 class ExecutionEngine {
 public:
     ExecutionEngine(const std::string& symbol = "DEFAULT",
@@ -43,16 +39,13 @@ public:
         , realized_pnl_(0.0)
         , total_fees_(0.0)
     {
-        if (symbol.empty()) {
+        if (symbol.empty())
             throw std::invalid_argument("Symbol cannot be empty");
-        }
     }
 
-    // Submit an order to the book. Returns all trades that resulted.
     Trades execute_order(OrderPointer order) {
-        if (!order) {
+        if (!order)
             throw std::invalid_argument("Cannot execute null order");
-        }
 
         OrderId order_id = order->GetOrderId();
         orders_owned_[order_id] = order->GetSide();
@@ -60,13 +53,11 @@ public:
         bool is_taker = can_match_immediately(order);
         auto trades   = orderbook_.AddOrder(order);
 
-        for (const auto& trade : trades) {
+        for (const auto& trade : trades)
             update_position(trade, is_taker);
-        }
 
-        if (order->IsFilled()) {
+        if (order->IsFilled())
             orders_owned_.erase(order_id);
-        }
 
         return trades;
     }
@@ -78,13 +69,12 @@ public:
 
     Trades modify_order(const OrderModify& modify) {
         auto trades = orderbook_.MatchOrder(modify);
-        for (const auto& trade : trades) {
+        for (const auto& trade : trades)
             update_position(trade, true);
-        }
         return trades;
     }
 
-    double get_position()      const {
+    double get_position() const {
         auto it = positions_.find(symbol_);
         return it != positions_.end() ? it->second : 0.0;
     }
@@ -98,6 +88,8 @@ public:
     double get_total_fees()     const { return total_fees_; }
     int64_t get_latency_ns()    const { return config_.latency_ns; }
     double get_slippage_pct()   const { return config_.slippage_pct; }
+
+    const std::vector<double>& get_closed_trade_pnls() const { return closed_trade_pnls_; }
 
     double get_unrealized_pnl() const {
         double position = get_position();
@@ -129,15 +121,12 @@ public:
         return asks.empty() ? 0 : asks[0].price_;
     }
 
-    // Returns nullopt when the book is completely empty on both sides.
     std::optional<double> get_mid_price() const {
         Price bid = get_best_bid();
         Price ask = get_best_ask();
-
         if (bid == 0 && ask == 0) return std::nullopt;
         if (bid == 0) return ask / 100.0;
         if (ask == 0) return bid / 100.0;
-
         return (bid + ask) / 200.0;
     }
 
@@ -145,16 +134,17 @@ public:
         positions_.clear();
         avg_prices_.clear();
         orders_owned_.clear();
-        realized_pnl_   = 0.0;
-        total_fees_     = 0.0;
-        orderbook_      = Orderbook();
+        closed_trade_pnls_.clear();
+        realized_pnl_ = 0.0;
+        total_fees_   = 0.0;
+        orderbook_    = Orderbook();
     }
 
     struct Stats {
-        size_t total_trades    = 0;
-        double total_volume    = 0.0;
-        double total_fees      = 0.0;
-        size_t orders_in_book  = 0;
+        size_t total_trades   = 0;
+        double total_volume   = 0.0;
+        double total_fees     = 0.0;
+        size_t orders_in_book = 0;
     };
 
     Stats get_stats() const {
@@ -169,35 +159,29 @@ private:
     ExecutionConfig config_;
     Orderbook       orderbook_;
 
-    std::map<std::string, double>           positions_;
-    std::map<std::string, double>           avg_prices_;
-    std::unordered_map<OrderId, Side>       orders_owned_;
+    std::map<std::string, double>       positions_;
+    std::map<std::string, double>       avg_prices_;
+    std::unordered_map<OrderId, Side>   orders_owned_;
 
-    double realized_pnl_;
-    double total_fees_;
+    double              realized_pnl_;
+    double              total_fees_;
+    std::vector<double> closed_trade_pnls_;
 
-    // Returns true if the order would cross the spread and trade immediately.
     bool can_match_immediately(OrderPointer order) const {
         if (order->GetSide() == Side::Buy) {
             Price best_ask = get_best_ask();
-            if (best_ask == 0) return false;
-            return order->GetPrice() >= best_ask;
+            return best_ask != 0 && order->GetPrice() >= best_ask;
         } else {
             Price best_bid = get_best_bid();
-            if (best_bid == 0) return false;
-            return order->GetPrice() <= best_bid;
+            return best_bid != 0 && order->GetPrice() <= best_bid;
         }
     }
 
-    // Updates position state and PnL after a matched trade.
-    // Slippage is applied to the effective execution price before any
-    // PnL or average-price calculations so that the cost is reflected in
-    // both realised PnL and the recorded entry/exit price.
     void update_position(const Trade& trade, bool is_taker) {
         const auto& bid_trade = trade.GetBidTrade();
         const auto& ask_trade = trade.GetAskTrade();
 
-        double quantity = static_cast<double>(bid_trade.quantity_);
+        double quantity  = static_cast<double>(bid_trade.quantity_);
         double raw_price = static_cast<double>(bid_trade.price_) / 100.0;
 
         auto bid_it = orders_owned_.find(bid_trade.orderId_);
@@ -207,11 +191,9 @@ private:
         bool were_seller = (ask_it != orders_owned_.end() && ask_it->second == Side::Sell);
 
         if (!were_buyer && !were_seller) return;
-        if (were_buyer && were_seller) {
+        if (were_buyer && were_seller)
             throw std::logic_error("Wash trade detected: order matched against itself");
-        }
 
-        // Buyers pay a higher effective price; sellers receive a lower one.
         double effective_price = were_buyer
             ? raw_price * (1.0 + config_.slippage_pct)
             : raw_price * (1.0 - config_.slippage_pct);
@@ -225,9 +207,10 @@ private:
             realized_pnl_ -= fee;
 
             if (current_position < 0) {
-                // Covering an existing short
                 double cover_qty = std::min(quantity, -current_position);
-                realized_pnl_ += cover_qty * (current_avg_price - effective_price);
+                double snap      = realized_pnl_;
+                realized_pnl_   += cover_qty * (current_avg_price - effective_price);
+                closed_trade_pnls_.push_back(realized_pnl_ - snap);
 
                 if (quantity > -current_position) {
                     positions_[symbol_]  = quantity + current_position;
@@ -237,7 +220,6 @@ private:
                     if (positions_[symbol_] == 0.0) avg_prices_[symbol_] = 0.0;
                 }
             } else {
-                // Adding to or initiating a long
                 if (current_position == 0.0) {
                     avg_prices_[symbol_] = effective_price;
                 } else {
@@ -255,9 +237,10 @@ private:
             realized_pnl_ -= fee;
 
             if (current_position > 0) {
-                // Reducing or closing a long
                 double sell_qty = std::min(quantity, current_position);
-                realized_pnl_ += sell_qty * (effective_price - current_avg_price);
+                double snap     = realized_pnl_;
+                realized_pnl_  += sell_qty * (effective_price - current_avg_price);
+                closed_trade_pnls_.push_back(realized_pnl_ - snap);
 
                 if (quantity > current_position) {
                     positions_[symbol_]  = -(quantity - current_position);
@@ -267,7 +250,6 @@ private:
                     if (positions_[symbol_] == 0.0) avg_prices_[symbol_] = 0.0;
                 }
             } else {
-                // Adding to or initiating a short
                 if (current_position == 0.0) {
                     avg_prices_[symbol_] = effective_price;
                 } else {
@@ -281,11 +263,9 @@ private:
     }
 
     double calculate_fee(double price, double quantity, bool is_taker) const {
-        if (price <= 0.0 || quantity <= 0.0) {
+        if (price <= 0.0 || quantity <= 0.0)
             throw std::invalid_argument("Price and quantity must be positive");
-        }
-        double fee_rate = is_taker ? config_.taker_fee : config_.maker_fee;
-        return price * quantity * fee_rate;
+        return price * quantity * (is_taker ? config_.taker_fee : config_.maker_fee);
     }
 };
 

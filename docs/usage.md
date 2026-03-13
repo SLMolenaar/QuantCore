@@ -30,10 +30,10 @@ The CSV loader expects columns: `timestamp`, `open`, `high`, `low`, `close`, `vo
 ```python
 import quantcore as qc
 
-bars = qc.load_csv_data('AAPL', 'data/aapl.csv')
+bars = qc.load_csv_data('data/aapl.csv', 'AAPL')
 ```
 
-The first argument is the symbol name that will appear in `MarketDataEvent.symbol`. The loader returns a `List[BarData]`.
+The first argument is the filepath. The second is the symbol name that will appear in `MarketDataEvent.symbol`. The loader returns a `List[BarData]`.
 
 You can also use `CSVDataLoader` directly if you need lower-level access:
 
@@ -200,7 +200,7 @@ self.generate_signal(sym, qc.SignalType.BUY, 0.5, event.get_timestamp())
 ```python
 results = qc.run_backtest(
     strategy=MyStrategy(),
-    data={'AAPL': qc.load_csv_data('AAPL', 'data/aapl.csv')},
+    data={'AAPL': qc.load_csv_data('data/aapl.csv', 'AAPL')},
     initial_capital=100_000.0,
 )
 ```
@@ -214,7 +214,7 @@ Use this when you need to configure execution, position sizing, or risk limits b
 ```python
 engine = qc.BacktestEngine(100_000.0)
 
-engine.add_data('AAPL', qc.load_csv_data('AAPL', 'data/aapl.csv'))
+engine.add_data('AAPL', qc.load_csv_data('data/aapl.csv', 'AAPL'))
 engine.set_strategy(MyStrategy())
 
 final_value = engine.run()
@@ -391,9 +391,15 @@ Sizes based on a fixed risk amount (fraction of capital) divided by stop-loss di
 
 ```python
 sizer = qc.RiskBased(0.01)  # Risk 1% of capital per trade
+engine.set_position_sizer(sizer)
+engine.set_volatility_params(
+    default_vol=0.02,   # fallback volatility estimate
+    stop_distance=0.05, # stop-loss distance as fraction of price (e.g. 5%)
+    lookback=20         # bars used for rolling volatility
+)
 ```
 
-Requires `stop_loss_distance` in `PositionSizingContext` to be non-zero. When used via `BacktestEngine`, you can pass `stop_loss_distance` through signal strength or configure a fixed stop on the sizer. In practice, combine with a strategy that calculates ATR-based stops.
+`set_volatility_params` controls the `stop_loss_distance` the engine injects into every `PositionSizingContext`. Without it the stop distance falls back to the engine's internal default and `RiskBased` will produce zero sizes. In practice, set `stop_distance` to a fixed ATR-based estimate before running.
 
 ### KellyCriterion
 
@@ -810,9 +816,9 @@ Pass multiple symbols in the `data` dict. The engine interleaves their bars in t
 results = qc.run_backtest(
     strategy=MyMultiAssetStrategy(),
     data={
-        'AAPL':  qc.load_csv_data('AAPL',  'data/aapl.csv'),
-        'GOOGL': qc.load_csv_data('GOOGL', 'data/googl.csv'),
-        'MSFT':  qc.load_csv_data('MSFT',  'data/msft.csv'),
+        'AAPL':  qc.load_csv_data('data/aapl.csv',  'AAPL'),
+        'GOOGL': qc.load_csv_data('data/googl.csv', 'GOOGL'),
+        'MSFT':  qc.load_csv_data('data/msft.csv',  'MSFT'),
     },
     initial_capital=100_000.0,
 )
@@ -846,7 +852,7 @@ import itertools
 import numpy as np
 from quantcore.analytics import calculate_sharpe_ratio, calculate_returns
 
-bars = qc.load_csv_data('AAPL', 'data/aapl.csv')
+bars = qc.load_csv_data('data/aapl.csv', 'AAPL')
 
 fast_periods = [10, 20, 50]
 slow_periods = [100, 150, 200]
@@ -882,7 +888,7 @@ from multiprocessing import Pool
 
 def run_single(params):
     fast, slow = params
-    bars     = qc.load_csv_data('AAPL', 'data/aapl.csv')
+    bars     = qc.load_csv_data('data/aapl.csv', 'AAPL')
     strategy = qc.SMACrossover(fast_period=fast, slow_period=slow)
     engine   = qc.BacktestEngine(100_000.0)
     engine.add_data('AAPL', bars)
@@ -914,7 +920,7 @@ A basic walk-forward setup: optimize in-sample, evaluate out-of-sample, roll for
 import numpy as np
 from quantcore.analytics import calculate_sharpe_ratio, calculate_returns
 
-all_bars   = qc.load_csv_data('AAPL', 'data/aapl.csv')
+all_bars   = qc.load_csv_data('data/aapl.csv', 'AAPL')
 n_bars     = len(all_bars)
 is_window  = 252   # 1 year in-sample
 oos_window = 63    # 1 quarter out-of-sample
