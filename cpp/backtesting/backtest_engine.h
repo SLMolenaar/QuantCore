@@ -261,7 +261,16 @@ private:
         for (const auto& [symbol, engine] : engines_)
             portfolio_->update_position(symbol, engine->get_position());
 
-        double total_equity = init_cap_ + get_total_pnl();
+        double total_equity = init_cap_;
+        for (const auto& [symbol, engine] : engines_) {
+            double pos = engine->get_position();
+            double avg = engine->get_average_price();
+            auto   px  = last_px_.find(symbol);
+            double unrealized = (pos != 0.0 && avg != 0.0 && px != last_px_.end())
+                                ? pos * (px->second - avg)
+                                : 0.0;
+            total_equity += engine->get_realized_pnl() + unrealized;
+        }
         curr_cap_ = total_equity;
 
         double total_position_value = 0.0;
@@ -271,9 +280,8 @@ private:
             if (px_it != last_px_.end() && pos != 0.0)
                 total_position_value += std::abs(pos * px_it->second);
         }
-        portfolio_->set_cash(total_equity - total_position_value);
+        portfolio_->set_cash(curr_cap_ - total_position_value);
     }
-
     double calculate_volatility(const std::string& symbol) const {
         auto it = price_history_.find(symbol);
         if (it == price_history_.end() || it->second.size() < 2) return default_volatility_;
@@ -313,10 +321,13 @@ private:
             if (std::abs(pos) < 1.0) continue;
             auto px_it = last_px_.find(symbol);
             if (px_it == last_px_.end()) continue;
-            Side side = (pos > 0) ? Side::Sell : Side::Buy;
-            auto ord  = make_event<OrderEvent>(
+            Side   side   = (pos > 0) ? Side::Sell : Side::Buy;
+            double ord_px = (side == Side::Buy)
+                ? px_it->second * (1.0 + mm_spread_)
+                : px_it->second * (1.0 - mm_spread_);
+            auto ord = make_event<OrderEvent>(
                 symbol, timestamp, side, OrderType::GoodTillCancel,
-                std::abs(pos), px_it->second
+                std::abs(pos), ord_px
             );
             ord->set_order_id(next_oid_++);
             eq_.push(ord);
