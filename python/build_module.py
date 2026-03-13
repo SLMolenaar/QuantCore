@@ -13,6 +13,7 @@ import os
 import sys
 import argparse
 from pathlib import Path
+import pybind11
 
 
 class Colors:
@@ -165,7 +166,8 @@ def configure_cmake(python_dir, build_dir, cmake_path, python_exe):
         "-S", ".",
         "-B", "build",
         "-DCMAKE_BUILD_TYPE=Release",
-        f"-DPython3_EXECUTABLE={python_exe}"
+        f"-DPython3_EXECUTABLE={python_exe}",
+        f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
     ]
 
     # force 64-bit on Windows with Visual Studio
