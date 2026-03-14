@@ -658,15 +658,47 @@ def monte_carlo_validation(
     bars   = data[symbol]
 
     def _make_sample(seed: int) -> Dict[str, list]:
+        from quantcore._core import BarData
         rng = np.random.default_rng(seed)
+        closes = np.array([bar.close for bar in bars])
+
+        # compute log returns from the price series
+        log_returns = np.diff(np.log(closes))
+
         if method == 'bootstrap':
-            indices = sorted(rng.choice(len(bars), size=len(bars), replace=True))
+            sampled_returns = rng.choice(log_returns, size=len(log_returns), replace=True)
         elif method == 'shuffle':
-            indices = rng.permutation(len(bars))
+            sampled_returns = rng.permutation(log_returns)
         else:
             raise ValueError(f"Unknown method: {method}")
-        return {symbol: [bars[i] for i in indices]}
 
+        # reconstruct a synthetic price series anchored at the first close
+        new_closes = closes[0] * np.exp(np.concatenate([[0], np.cumsum(sampled_returns)]))
+
+        # rebuild bars scaling OHLC proportionally to preserve intra-bar structure
+        new_bars = []
+        for i, bar in enumerate(bars):
+            scale = new_closes[i] / bar.close
+            new_open  = bar.open  * scale
+            new_high  = bar.high  * scale
+            new_low   = bar.low   * scale
+            new_close = new_closes[i]
+
+            # clamp to guarantee BarData validation constraints are satisfied
+            new_high  = max(new_high, new_open, new_close)
+            new_low   = min(new_low,  new_open, new_close)
+
+            new_bars.append(BarData(
+                bar.symbol,
+                bar.timestamp_ns,
+                new_open,
+                new_high,
+                new_low,
+                new_close,
+                bar.volume,
+            ))
+
+        return {symbol: new_bars}
     tasks = [
         (strategy_factory, params,
          _serialize_data(_make_sample(seed)), initial_capital)

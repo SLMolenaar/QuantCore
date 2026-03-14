@@ -18,8 +18,8 @@ public:
     // Defaults to the global heap so MarketMaker can still be used standalone.
     MarketMaker(
         double base_spread_pct = 0.0001,
-        int num_levels = 5,
-        Quantity base_depth = 10000,
+        int    num_levels      = 5,
+        Quantity base_depth    = 10000,
         std::pmr::memory_resource* order_allocator = std::pmr::get_default_resource()
     )
         : base_spread_pct_(base_spread_pct)
@@ -35,8 +35,8 @@ public:
     void update_quotes(ExecutionEngine& engine, const MarketDataEvent& event) {
         cancel_orders(engine);
 
-        double mid_price = event.get_close();
-        double volume = event.get_volume();
+        double  mid_price = event.get_close();
+        double  volume    = event.get_volume();
         int64_t timestamp = event.get_timestamp();
 
         price_hist_.push_back(mid_price);
@@ -44,8 +44,8 @@ public:
             price_hist_.pop_front();
         }
 
-        double volatility = calc_volatility();
-        double time_factor = get_time_factor(timestamp);
+        double volatility   = calc_volatility();
+        double time_factor  = get_time_factor(timestamp);
 
         update_spread(volatility, volume, time_factor);
 
@@ -64,17 +64,17 @@ public:
     }
 
     void set_base_depth(Quantity depth) {
-        base_depth_ = std::max(static_cast<Quantity>(100), depth);
+        base_depth_ = std::max(static_cast<Quantity>(1e-8), depth);
     }
 
 private:
-    double base_spread_pct_;
-    double current_spread_pct_;
-    int num_levels_;
+    double   base_spread_pct_;
+    double   current_spread_pct_;
+    int      num_levels_;
     Quantity base_depth_;
     uint64_t next_order_id_;
 
-    std::deque<double> price_hist_;
+    std::deque<double>   price_hist_;
     std::vector<OrderId> active_orders_;
     mutable std::mt19937 rng_;
 
@@ -91,7 +91,7 @@ private:
     }
 
     void place_orders(ExecutionEngine& engine, double mid_price,
-                     double volume, Side side) {
+                      double volume, Side side) {
         auto& ob = engine.get_orderbook();
 
         for (int level = 0; level < num_levels_; ++level) {
@@ -101,13 +101,12 @@ private:
                 ? mid_price * (1.0 - offset)
                 : mid_price * (1.0 + offset);
 
-            // Ensure price is positive
             price = std::max(0.01, price);
 
-            Price price_cents = static_cast<Price>(price * 100.0);
-            Quantity quantity = calc_quantity(level, volume);
+            Price    price_cents = static_cast<Price>(price * 100.0);
+            Quantity quantity    = calc_quantity(level, volume);
 
-            if (quantity == 0) {
+            if (quantity < 1e-8) {
                 continue;
             }
 
@@ -128,16 +127,16 @@ private:
     }
 
     Quantity calc_quantity(int level, double volume) const {
-        double decay = std::exp(-0.3 * level);
+        double decay      = std::exp(-0.3 * level);
         double vol_factor = 1.0 + std::log1p(volume / 1000000.0) * 0.1;
 
-        double raw_quantity = base_depth_ * decay * vol_factor;
+        double raw_quantity = static_cast<double>(base_depth_) * decay * vol_factor;
 
         std::uniform_real_distribution<double> dist(0.9, 1.1);
         raw_quantity *= dist(rng_);
 
-        Quantity quantity = static_cast<Quantity>(raw_quantity);
-        return std::max(static_cast<Quantity>(1), quantity);
+        // Return as-is — fractional quantities are supported
+        return std::max(1e-8, raw_quantity);
     }
 
     double calc_volatility() const {

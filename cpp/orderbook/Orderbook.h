@@ -24,31 +24,31 @@ class Orderbook {
 private:
     struct OrderEntry {
         OrderPointer order_{nullptr};
-        std::size_t location_; // index into the price level vector
+        std::size_t  location_; // index into the price level vector
     };
 
-    std::map<Price, OrderPointers, std::greater<Price> > bids_;
-    std::map<Price, OrderPointers, std::less<Price> > asks_;
-    std::unordered_map<OrderId, OrderEntry> orders_;
+    std::map<Price, OrderPointers, std::greater<Price>> bids_;
+    std::map<Price, OrderPointers, std::less<Price>>    asks_;
+    std::unordered_map<OrderId, OrderEntry>             orders_;
 
     std::chrono::system_clock::time_point lastDayReset_;
     std::chrono::hours dayResetHour_{15};
-    int dayResetMinute_{59};
+    int                dayResetMinute_{59};
 
     MarketDataStats stats_;
-    uint64_t lastSequenceNumber_ = 0;
-    bool isInitialized_ = false;
+    uint64_t        lastSequenceNumber_ = 0;
+    bool            isInitialized_      = false;
 
     ExchangeRules exchangeRules_;
 
     bool CanMatch(Side side, Price price) const {
         if (side == Side::Buy) {
             if (asks_.empty()) return false;
-            const auto &[bestAsk, _] = *asks_.begin();
+            const auto& [bestAsk, _] = *asks_.begin();
             return price >= bestAsk;
         } else {
             if (bids_.empty()) return false;
-            const auto &[bestBid, _] = *bids_.begin();
+            const auto& [bestBid, _] = *bids_.begin();
             return price <= bestBid;
         }
     }
@@ -58,11 +58,11 @@ private:
             return OrderValidation::Reject(RejectReason::DuplicateOrderId);
         }
 
-        Price orderPrice = order->GetPrice();
-        bool isConvertedMarketOrder = (orderPrice == std::numeric_limits<Price>::max() ||
-                                       orderPrice == std::numeric_limits<Price>::min());
+        Price orderPrice         = order->GetPrice();
+        bool  isConvertedMarket  = (orderPrice == std::numeric_limits<Price>::max() ||
+                                    orderPrice == std::numeric_limits<Price>::min());
 
-        if (!isConvertedMarketOrder) {
+        if (!isConvertedMarket) {
             if (!exchangeRules_.IsValidPrice(orderPrice)) {
                 return OrderValidation::Reject(RejectReason::InvalidPrice);
             }
@@ -78,7 +78,7 @@ private:
             }
         }
 
-        if (!isConvertedMarketOrder) {
+        if (!isConvertedMarket) {
             if (!exchangeRules_.IsValidNotional(order->GetPrice(), order->GetRemainingQuantity())) {
                 return OrderValidation::Reject(RejectReason::BelowMinNotional);
             }
@@ -88,17 +88,17 @@ private:
     }
 
     void CheckAndResetDay() {
-        auto now = std::chrono::system_clock::now();
-        auto nowTime = std::chrono::system_clock::to_time_t(now);
-        auto lastResetTime = std::chrono::system_clock::to_time_t(lastDayReset_);
+        auto now          = std::chrono::system_clock::now();
+        auto nowTime      = std::chrono::system_clock::to_time_t(now);
+        auto lastResetTime= std::chrono::system_clock::to_time_t(lastDayReset_);
 
         std::tm nowTm = *std::localtime(&nowTime);
 
-        std::tm todayResetTm = nowTm;
-        todayResetTm.tm_hour = dayResetHour_.count();
-        todayResetTm.tm_min = dayResetMinute_;
-        todayResetTm.tm_sec = 0;
-        auto todayResetTime = std::mktime(&todayResetTm);
+        std::tm todayResetTm    = nowTm;
+        todayResetTm.tm_hour    = dayResetHour_.count();
+        todayResetTm.tm_min     = dayResetMinute_;
+        todayResetTm.tm_sec     = 0;
+        auto todayResetTime     = std::mktime(&todayResetTm);
 
         if (lastResetTime < todayResetTime && nowTime >= todayResetTime) {
             CancelGoodForDayOrders();
@@ -108,43 +108,43 @@ private:
 
     void CancelGoodForDayOrders() {
         std::vector<OrderId> ordersToCancel;
-        for (const auto &[orderId, entry]: orders_) {
+        for (const auto& [orderId, entry] : orders_) {
             if (entry.order_->GetOrderType() == OrderType::GoodForDay) {
                 ordersToCancel.push_back(orderId);
             }
         }
-        for (const auto &orderId: ordersToCancel) {
+        for (const auto& orderId : ordersToCancel) {
             CancelOrder(orderId);
         }
     }
 
-    std::vector<std::pair<OrderPointer, Quantity> > CollectMatchesForFillOrKill(
+    std::vector<std::pair<OrderPointer, Quantity>> CollectMatchesForFillOrKill(
         OrderPointer order,
-        Quantity &remainingQuantity) {
-
-        std::vector<std::pair<OrderPointer, Quantity> > matchingOrders;
+        Quantity&    remainingQuantity)
+    {
+        std::vector<std::pair<OrderPointer, Quantity>> matchingOrders;
 
         if (order->GetSide() == Side::Buy) {
-            for (auto &[askPrice, askOrders]: asks_) {
+            for (auto& [askPrice, askOrders] : asks_) {
                 if (askPrice > order->GetPrice()) break;
-                for (auto &ask: askOrders) {
+                for (auto& ask : askOrders) {
                     Quantity matchQty = std::min(remainingQuantity, ask->GetRemainingQuantity());
                     matchingOrders.push_back({ask, matchQty});
                     remainingQuantity -= matchQty;
-                    if (remainingQuantity == 0) break;
+                    if (remainingQuantity < 1e-8) break;
                 }
-                if (remainingQuantity == 0) break;
+                if (remainingQuantity < 1e-8) break;
             }
         } else {
-            for (auto &[bidPrice, bidOrders]: bids_) {
+            for (auto& [bidPrice, bidOrders] : bids_) {
                 if (bidPrice < order->GetPrice()) break;
-                for (auto &bid: bidOrders) {
+                for (auto& bid : bidOrders) {
                     Quantity matchQty = std::min(remainingQuantity, bid->GetRemainingQuantity());
                     matchingOrders.push_back({bid, matchQty});
                     remainingQuantity -= matchQty;
-                    if (remainingQuantity == 0) break;
+                    if (remainingQuantity < 1e-8) break;
                 }
-                if (remainingQuantity == 0) break;
+                if (remainingQuantity < 1e-8) break;
             }
         }
 
@@ -153,23 +153,24 @@ private:
 
     Trades ExecuteMatchesForFillOrKill(
         OrderPointer order,
-        const std::vector<std::pair<OrderPointer, Quantity> > &matchingOrders) {
+        const std::vector<std::pair<OrderPointer, Quantity>>& matchingOrders)
+    {
         Trades trades;
 
-        for (auto &[matchOrder, quantity]: matchingOrders) {
+        for (auto& [matchOrder, quantity] : matchingOrders) {
             Price tradePrice = matchOrder->GetPrice();
             order->Fill(quantity);
             matchOrder->Fill(quantity);
 
             if (order->GetSide() == Side::Buy) {
                 trades.push_back(Trade{
-                    TradeInfo{order->GetOrderId(), tradePrice, quantity},
+                    TradeInfo{order->GetOrderId(),      tradePrice, quantity},
                     TradeInfo{matchOrder->GetOrderId(), tradePrice, quantity}
                 });
             } else {
                 trades.push_back(Trade{
                     TradeInfo{matchOrder->GetOrderId(), tradePrice, quantity},
-                    TradeInfo{order->GetOrderId(), tradePrice, quantity}
+                    TradeInfo{order->GetOrderId(),      tradePrice, quantity}
                 });
             }
 
@@ -184,7 +185,7 @@ private:
     Trades MatchFillOrKill(OrderPointer order) {
         Quantity remainingQuantity = order->GetRemainingQuantity();
         auto matchingOrders = CollectMatchesForFillOrKill(order, remainingQuantity);
-        if (remainingQuantity > 0) return {};
+        if (remainingQuantity > 1e-8) return {};
         return ExecuteMatchesForFillOrKill(order, matchingOrders);
     }
 
@@ -197,20 +198,20 @@ private:
         while (true) {
             if (bids_.empty() || asks_.empty()) break;
 
-            auto &[bidPrice, bids] = *bids_.begin();
-            auto &[askPrice, asks] = *asks_.begin();
+            auto& [bidPrice, bids] = *bids_.begin();
+            auto& [askPrice, asks] = *asks_.begin();
 
             if (bidPrice < askPrice) break;
 
             // Cursors into the front of each price level vector.
             // Filled orders are collected and erased in one shot after the inner loop
             // to avoid repeated O(n) shifts during matching.
-            std::size_t bidIdx = 0, askIdx = 0;
+            std::size_t          bidIdx = 0, askIdx = 0;
             std::vector<OrderId> filledOrders;
 
             while (bidIdx < bids.size() && askIdx < asks.size()) {
-                auto &bid = bids[bidIdx];
-                auto &ask = asks[askIdx];
+                auto& bid = bids[bidIdx];
+                auto& ask = asks[askIdx];
 
                 Quantity quantity = std::min(bid->GetRemainingQuantity(), ask->GetRemainingQuantity());
 
@@ -220,7 +221,7 @@ private:
                 bool askIsMarket = (ask->GetPrice() == std::numeric_limits<Price>::max() ||
                                     ask->GetPrice() == std::numeric_limits<Price>::min());
 
-                if (bidIsMarket && !askIsMarket)      tradePrice = ask->GetPrice();
+                if      (bidIsMarket && !askIsMarket) tradePrice = ask->GetPrice();
                 else if (askIsMarket && !bidIsMarket) tradePrice = bid->GetPrice();
                 else                                  tradePrice = ask->GetPrice();
 
@@ -243,7 +244,7 @@ private:
             }
 
             // Remove filled orders from the lookup map
-            for (const auto &orderId: filledOrders) {
+            for (const auto& orderId : filledOrders) {
                 orders_.erase(orderId);
             }
 
@@ -274,7 +275,7 @@ private:
         return trades;
     }
 
-    void ProcessNewOrder(const NewOrderMessage &msg) {
+    void ProcessNewOrder(const NewOrderMessage& msg) {
         try {
             auto order = std::make_shared<Order>(
                 msg.orderType, msg.orderId, msg.side, msg.price, msg.quantity
@@ -282,60 +283,60 @@ private:
             auto trades = AddOrder(order);
             stats_.newOrders++;
             stats_.trades += trades.size();
-        } catch (const std::invalid_argument &) {
+        } catch (const std::invalid_argument&) {
             stats_.errors++;
         }
     }
 
-    void ProcessCancel(const CancelOrderMessage &msg) {
+    void ProcessCancel(const CancelOrderMessage& msg) {
         CancelOrder(msg.orderId);
         stats_.cancellations++;
     }
 
-    void ProcessModify(const ModifyOrderMessage &msg) {
+    void ProcessModify(const ModifyOrderMessage& msg) {
         OrderModify modify(msg.orderId, msg.side, msg.newPrice, msg.newQuantity);
         MatchOrder(modify);
         stats_.modifications++;
     }
 
-    void ProcessTrade(const TradeMessage &msg) {
+    void ProcessTrade(const TradeMessage& msg) {
         stats_.trades++;
     }
 
-    void ProcessSnapshot(const BookSnapshotMessage &msg) {
+    void ProcessSnapshot(const BookSnapshotMessage& msg) {
         bids_.clear();
         asks_.clear();
         orders_.clear();
 
         OrderId syntheticId = 0x8000000000000000ULL;
 
-        for (const auto &level: msg.bids) {
-            if (level.quantity == 0) continue;
+        for (const auto& level : msg.bids) {
+            if (level.quantity < 1e-8) continue;
             try {
                 auto order = std::make_shared<Order>(
                     OrderType::GoodTillCancel, syntheticId++,
-                    Side::Buy, level.price, level.quantity
+                    Side::Buy, level.price, static_cast<Quantity>(level.quantity)
                 );
-                auto &orders = bids_[level.price];
+                auto& orders = bids_[level.price];
                 orders.push_back(order);
                 orders_.insert({order->GetOrderId(), OrderEntry{order, orders.size() - 1}});
-            } catch (const std::invalid_argument &) { continue; }
+            } catch (const std::invalid_argument&) { continue; }
         }
 
-        for (const auto &level: msg.asks) {
-            if (level.quantity == 0) continue;
+        for (const auto& level : msg.asks) {
+            if (level.quantity < 1e-8) continue;
             try {
                 auto order = std::make_shared<Order>(
                     OrderType::GoodTillCancel, syntheticId++,
-                    Side::Sell, level.price, level.quantity
+                    Side::Sell, level.price, static_cast<Quantity>(level.quantity)
                 );
-                auto &orders = asks_[level.price];
+                auto& orders = asks_[level.price];
                 orders.push_back(order);
                 orders_.insert({order->GetOrderId(), OrderEntry{order, orders.size() - 1}});
-            } catch (const std::invalid_argument &) { continue; }
+            } catch (const std::invalid_argument&) { continue; }
         }
 
-        isInitialized_ = true;
+        isInitialized_      = true;
         lastSequenceNumber_ = msg.sequenceNumber;
         stats_.snapshots++;
     }
@@ -345,12 +346,12 @@ public:
         : lastDayReset_(std::chrono::system_clock::now()) {
     }
 
-    void SetExchangeRules(const ExchangeRules &rules) { exchangeRules_ = rules; }
-    const ExchangeRules &GetExchangeRules() const { return exchangeRules_; }
+    void SetExchangeRules(const ExchangeRules& rules) { exchangeRules_ = rules; }
+    const ExchangeRules& GetExchangeRules() const { return exchangeRules_; }
 
     void SetDayResetTime(int hour, int minute = 59) {
         if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
-            dayResetHour_ = std::chrono::hours(hour);
+            dayResetHour_   = std::chrono::hours(hour);
             dayResetMinute_ = minute;
         }
     }
@@ -396,19 +397,18 @@ public:
         return MatchOrders(isIoc ? order->GetOrderId() : std::optional<OrderId>{});
     }
 
-
     void CancelOrder(OrderId orderId) {
         if (!orders_.contains(orderId)) return;
 
         // Copy the fields we need before erasing from orders_, since erasing
         // destroys the OrderEntry and with it the shared_ptr keeping order alive.
-        const auto &entry = orders_.at(orderId);
-        const Side side = entry.order_->GetSide();
-        const Price price = entry.order_->GetPrice();
+        const auto&   entry = orders_.at(orderId);
+        const Side    side  = entry.order_->GetSide();
+        const Price   price = entry.order_->GetPrice();
         const std::size_t idx = entry.location_;
         orders_.erase(orderId);
 
-        auto &orders = (side == Side::Sell)
+        auto& orders = (side == Side::Sell)
             ? asks_.at(price)
             : bids_.at(price);
 
@@ -444,34 +444,35 @@ public:
         bidInfos.reserve(orders_.size());
         askInfos.reserve(orders_.size());
 
-        auto CreateLevelInfos = [](Price price, const OrderPointers &orders) {
+        auto CreateLevelInfos = [](Price price, const OrderPointers& orders) {
             return LevelInfo{
-                price, std::accumulate(orders.begin(), orders.end(), (Quantity)0,
-                    [](std::size_t runningSum, const OrderPointer &order) {
+                price,
+                std::accumulate(orders.begin(), orders.end(), Quantity{0.0},
+                    [](Quantity runningSum, const OrderPointer& order) {
                         return runningSum + order->GetRemainingQuantity();
                     })
             };
         };
 
-        for (const auto &[price, orders]: bids_) {
+        for (const auto& [price, orders] : bids_) {
             bidInfos.push_back(CreateLevelInfos(price, orders));
         }
-        for (const auto &[price, orders]: asks_) {
+        for (const auto& [price, orders] : asks_) {
             askInfos.push_back(CreateLevelInfos(price, orders));
         }
 
         return OrderbookLevelInfos(bidInfos, askInfos);
     }
 
-    bool ProcessMarketData(const MarketDataMessage &message) {
+    bool ProcessMarketData(const MarketDataMessage& message) {
         auto startTime = std::chrono::high_resolution_clock::now();
         try {
-            std::visit([this](auto &&msg) {
+            std::visit([this](auto&& msg) {
                 using T = std::decay_t<decltype(msg)>;
-                if constexpr (std::is_same_v<T, NewOrderMessage>)         ProcessNewOrder(msg);
-                else if constexpr (std::is_same_v<T, CancelOrderMessage>) ProcessCancel(msg);
-                else if constexpr (std::is_same_v<T, ModifyOrderMessage>) ProcessModify(msg);
-                else if constexpr (std::is_same_v<T, TradeMessage>)       ProcessTrade(msg);
+                if constexpr (std::is_same_v<T, NewOrderMessage>)          ProcessNewOrder(msg);
+                else if constexpr (std::is_same_v<T, CancelOrderMessage>)  ProcessCancel(msg);
+                else if constexpr (std::is_same_v<T, ModifyOrderMessage>)  ProcessModify(msg);
+                else if constexpr (std::is_same_v<T, TradeMessage>)        ProcessTrade(msg);
                 else if constexpr (std::is_same_v<T, BookSnapshotMessage>) ProcessSnapshot(msg);
             }, message);
 
@@ -488,16 +489,16 @@ public:
         }
     }
 
-    size_t ProcessMarketDataBatch(const std::vector<MarketDataMessage> &messages) {
+    size_t ProcessMarketDataBatch(const std::vector<MarketDataMessage>& messages) {
         size_t successCount = 0;
-        for (const auto &msg: messages) {
+        for (const auto& msg : messages) {
             if (ProcessMarketData(msg)) successCount++;
         }
         return successCount;
     }
 
-    const MarketDataStats &GetMarketDataStats() const { return stats_; }
-    void ResetMarketDataStats() { stats_.Reset(); }
-    bool IsInitialized() const { return isInitialized_; }
+    const MarketDataStats& GetMarketDataStats() const { return stats_; }
+    void  ResetMarketDataStats()                       { stats_.Reset(); }
+    bool  IsInitialized()        const { return isInitialized_; }
     uint64_t GetLastSequenceNumber() const { return lastSequenceNumber_; }
 };

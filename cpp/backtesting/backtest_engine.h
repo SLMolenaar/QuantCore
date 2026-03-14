@@ -235,7 +235,10 @@ private:
     int64_t         first_bar_timestamp_;
     ExecutionConfig exec_config_;
 
-    static constexpr size_t PRICE_HISTORY_BUFFER = 10;
+    static constexpr size_t  PRICE_HISTORY_BUFFER = 10;
+    // Minimum meaningful order size — rejects floating point noise but
+    // allows fractional shares down to 0.00000001.
+    static constexpr double  MIN_ORDER_QTY        = 1e-8;
 
     template<typename T, typename... Args>
     std::shared_ptr<T> make_event(Args&&... args) {
@@ -319,7 +322,7 @@ private:
         halted_ = true;
         for (const auto& [symbol, ee] : engines_) {
             double pos = ee->get_position();
-            if (std::abs(pos) < 1.0) continue;
+            if (std::abs(pos) < MIN_ORDER_QTY) continue;
             auto px_it = last_px_.find(symbol);
             if (px_it == last_px_.end()) continue;
             Side   side   = (pos > 0) ? Side::Sell : Side::Buy;
@@ -397,7 +400,8 @@ private:
         }
 
         double delta = target_pos - curr_pos;
-        if (std::abs(delta) < 1.0) return;
+        // Reject floating point noise but allow fractional shares
+        if (std::abs(delta) < MIN_ORDER_QTY) return;
 
         Side   ord_side = (delta > 0.0) ? Side::Buy : Side::Sell;
         double ord_qty  = std::abs(delta);
@@ -442,7 +446,8 @@ private:
         }
 
         Price    px_cents = static_cast<Price>(ord->get_price() * 100.0);
-        Quantity qty      = static_cast<Quantity>(ord->get_quantity());
+        // Quantity stays as double — no cast to uint32_t, preserving fractional shares
+        Quantity qty      = ord->get_quantity();
 
         auto order = std::make_shared<Order>(
             ord->get_order_type(), ord->get_order_id(),
@@ -465,7 +470,7 @@ private:
             // the commission field on FillEvent matches what is booked to P&L.
             // Strategy orders always cross the spread and are charged taker fees.
             double commission = fill_price
-                                * static_cast<double>(our_trade.quantity_)
+                                * our_trade.quantity_
                                 * exec_config_.taker_fee;
 
             auto fill = make_event<FillEvent>(
