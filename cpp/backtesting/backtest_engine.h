@@ -282,6 +282,7 @@ private:
         }
         portfolio_->set_cash(curr_cap_ - total_position_value);
     }
+
     double calculate_volatility(const std::string& symbol) const {
         auto it = price_history_.find(symbol);
         if (it == price_history_.end() || it->second.size() < 2) return default_volatility_;
@@ -378,7 +379,7 @@ private:
         auto ee_it = engines_.find(sig->get_symbol());
         if (ee_it == engines_.end()) return;
 
-        double curr_pos     = ee_it->second->get_position();
+        double curr_pos      = ee_it->second->get_position();
         double portfolio_vol = calculate_volatility(sig->get_symbol());
 
         double target_pos = 0.0;
@@ -409,8 +410,13 @@ private:
             ? curr_px * (1.0 + spread / 2.0)
             : curr_px * (1.0 - spread / 2.0);
 
+        // Notify the strategy if risk limits reject the order so it can
+        // react (e.g. reduce position targets, log, or halt trading).
         auto risk_check = risk_mgr_->check_order(sig->get_symbol(), ord_side, ord_qty, ord_px);
-        if (!risk_check.is_approved()) return;
+        if (!risk_check.is_approved()) {
+            strat_->on_rejected(sig->get_symbol(), risk_check.reason);
+            return;
+        }
 
         int64_t latency = ee_it->second->get_latency_ns();
         auto ord = make_event<OrderEvent>(
@@ -455,12 +461,19 @@ private:
                 ? raw_price * (1.0 + slippage_pct)
                 : raw_price * (1.0 - slippage_pct);
 
+            // Mirror the fee calculation in ExecutionEngine::calculate_fee so
+            // the commission field on FillEvent matches what is booked to P&L.
+            // Strategy orders always cross the spread and are charged taker fees.
+            double commission = fill_price
+                                * static_cast<double>(our_trade.quantity_)
+                                * exec_config_.taker_fee;
+
             auto fill = make_event<FillEvent>(
                 ord->get_symbol(), ord->get_timestamp(),
                 ord->get_order_id(), ord->get_side(),
                 our_trade.quantity_,
                 fill_price,
-                0.0
+                commission
             );
             eq_.push(fill);
         }

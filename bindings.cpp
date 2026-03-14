@@ -37,6 +37,11 @@ public:
         PYBIND11_OVERRIDE(void, Strategy, on_fill, event);
     }
 
+    // Forwards risk-limit rejections to Python subclasses that override on_rejected.
+    void on_rejected(const std::string& symbol, const std::string& reason) override {
+        PYBIND11_OVERRIDE(void, Strategy, on_rejected, symbol, reason);
+    }
+
     void reset() override {
         PYBIND11_OVERRIDE(void, Strategy, reset);
     }
@@ -207,6 +212,8 @@ PYBIND11_MODULE(_core, m) {
         .def(py::init<const std::string&>(), py::arg("name") = "Strategy")
         .def("on_data",          &Strategy::on_data)
         .def("on_fill",          &Strategy::on_fill)
+        .def("on_rejected",      &Strategy::on_rejected,
+             py::arg("symbol"), py::arg("reason"))
         .def("get_name",         &Strategy::get_name)
         .def("get_signals",      &Strategy::get_signals)
         .def("has_signals",      &Strategy::has_signals)
@@ -437,7 +444,7 @@ PYBIND11_MODULE(_core, m) {
     // ============================================================================
 
     m.def("hello",   []() { return "Hello from QuantCore C++!"; });
-    m.def("version", []() { return "0.1.0"; });
+    m.def("version", []() { return "0.1.8.4"; });
 
-    m.attr("__version__") = "0.1.0";
+    m.attr("__version__") = "0.1.8.4";
 }

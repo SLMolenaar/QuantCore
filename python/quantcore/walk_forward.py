@@ -37,6 +37,7 @@ Use the helper functions to convert if needed:
   - decimal_to_pct(0.105) -> 10.5
 """
 
+import warnings
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Callable, Any, Optional
@@ -128,7 +129,7 @@ def _backtest_worker(args: tuple) -> Optional[dict]:
         strategy = strategy_factory(**params)
         results  = qc.run_backtest(strategy, data, initial_capital)
 
-        equity_curve = np.array(results.get('equity_curve', []))
+        equity_curve = np.array(results.equity_curve)
         if len(equity_curve) == 0:
             return None
 
@@ -140,7 +141,7 @@ def _backtest_worker(args: tuple) -> Optional[dict]:
             'total_return': metrics.total_return / 100.0,  # pct -> decimal
             'max_drawdown': metrics.max_drawdown / 100.0,  # pct -> decimal
             'num_trades':   metrics.total_trades,
-            'final_value':  results['final_value'],
+            'final_value':  results.final_value,
         }
     except Exception:
         return None
@@ -199,7 +200,7 @@ def _window_worker(args: tuple) -> Optional[dict]:
         strategy    = strategy_factory(**best_params)
         oos_results = qc.run_backtest(strategy, test_data, initial_capital)
 
-        equity_curve = np.array(oos_results.get('equity_curve', []))
+        equity_curve = np.array(oos_results.equity_curve)
         if len(equity_curve) > 0:
             m   = calculate_all_metrics(equity_curve)
             oos = {
@@ -207,7 +208,7 @@ def _window_worker(args: tuple) -> Optional[dict]:
                 'total_return': m.total_return / 100.0,  # pct -> decimal
                 'max_drawdown': m.max_drawdown / 100.0,  # pct -> decimal
                 'num_trades':   m.total_trades,
-                'final_value':  oos_results['final_value'],
+                'final_value':  oos_results.final_value,
                 'equity_curve': equity_curve.tolist(),
             }
         else:
@@ -271,7 +272,7 @@ class WalkForwardResult:
     in_sample_results:      List[OptimizationResult]
     out_of_sample_results:  List[Dict[str, Any]]
     best_params_per_window: List[Dict[str, Any]]
-    # Chained out-of-sample equity curve spanning all windows. Each segment
+    # Chained out-of-sample equity curves spanning all windows. Each segment
     # is rescaled to start from the ending value of the previous segment so
     # that the curve is continuous and comparable to a single-run equity curve.
     combined_equity_curve:  np.ndarray
@@ -432,6 +433,9 @@ class WalkForwardAnalyzer:
     the ending value of the previous one, so the combined curve reflects
     compounded performance across all windows.
 
+    Note: Only single-asset data is supported. If a multi-symbol dict is
+    passed, only the first symbol is used and a warning is raised.
+
     Parameters
     ----------
     strategy_factory : callable
@@ -470,6 +474,17 @@ class WalkForwardAnalyzer:
             verbose:         bool  = False,
     ) -> WalkForwardResult:
         """Run walk-forward analysis and return aggregated results."""
+        # Warn loudly rather than silently dropping symbols — callers should
+        # know their data is being partially ignored.
+        if len(data) > 1:
+            ignored = list(data.keys())[1:]
+            warnings.warn(
+                f"WalkForwardAnalyzer only supports single-asset data. "
+                f"Only '{list(data.keys())[0]}' will be used; "
+                f"ignoring: {ignored}",
+                stacklevel=2,
+            )
+
         symbol = list(data.keys())[0]
         bars   = data[symbol]
         total  = len(bars)
@@ -613,6 +628,9 @@ def monte_carlo_validation(
     """
     Assess strategy robustness via repeated resampling of the price series.
 
+    Note: Only single-asset data is supported. If a multi-symbol dict is
+    passed, only the first symbol is used and a warning is raised.
+
     Parameters
     ----------
     method : str
@@ -625,6 +643,17 @@ def monte_carlo_validation(
     dict with arrays: sharpe_ratios, returns, drawdowns.
     NOTE: returns and drawdowns are in DECIMAL format (0.105 = 10.5%)
     """
+    # Warn loudly rather than silently dropping symbols — callers should
+    # know their data is being partially ignored.
+    if len(data) > 1:
+        ignored = list(data.keys())[1:]
+        warnings.warn(
+            f"monte_carlo_validation only supports single-asset data. "
+            f"Only '{list(data.keys())[0]}' will be used; "
+            f"ignoring: {ignored}",
+            stacklevel=2,
+        )
+
     symbol = list(data.keys())[0]
     bars   = data[symbol]
 

@@ -103,7 +103,7 @@ print(f"First bar: {bars[0].symbol} open={bars[0].open} close={bars[0].close}")
 
 ## 2. Writing a Strategy
 
-Subclass `qc.Strategy` and implement `on_data`. Implementing `on_fill` is optional.
+Subclass `qc.Strategy` and implement `on_data`. Implementing `on_fill` and `on_rejected` is optional.
 
 ```python
 import quantcore as qc
@@ -115,6 +115,10 @@ class MyStrategy(qc.Strategy):
 
     def on_fill(self, fill: qc.FillEvent):
         # Called after each execution confirmation
+        pass
+
+    def on_rejected(self, symbol: str, reason: str):
+        # Called when a signal is rejected by risk limits
         pass
 ```
 
@@ -166,6 +170,19 @@ fill.quantity
 fill.price
 fill.commission
 ```
+
+### on_rejected
+
+`on_rejected` is called whenever a signal is blocked by the risk manager before an order is placed. The strategy is not notified of rejections by default — override this method if you need to react to them (e.g. log, reduce position targets, or halt trading).
+
+```python
+def on_rejected(self, symbol: str, reason: str):
+    # symbol: the asset whose signal was rejected
+    # reason: human-readable explanation from the risk manager
+    print(f"Order rejected for {symbol}: {reason}")
+```
+
+Possible rejection reasons correspond to `RiskCheckResult` values: position limit breached, leverage limit breached, no capital available, max loss limit exceeded, or single-order notional limit breached.
 
 ### Generating signals
 
@@ -249,6 +266,9 @@ class ZScoreMeanReversion(qc.Strategy):
 
     def on_fill(self, fill):
         print(f"Filled: {fill.get_side()} {fill.get_quantity()} @ {fill.get_price():.2f}")
+
+    def on_rejected(self, symbol, reason):
+        print(f"Rejected: {symbol} — {reason}")
 ```
 
 ### Using signal strength
@@ -270,23 +290,24 @@ self.generate_signal(sym, qc.SignalType.BUY, 0.5, event.get_timestamp())
 ### run_backtest (convenience function)
 
 ```python
-results_dict = qc.run_backtest(
+results = qc.run_backtest(
     strategy=MyStrategy(),
     data={'AAPL': qc.load_csv_data('data/aapl.csv', 'AAPL')},
     initial_capital=100_000.0,
 )
 ```
 
-`run_backtest` returns a plain **dict**, not a `BacktestResults` object. Keys: `strategy`, `initial_capital`, `final_value`, `total_pnl`, `total_fees`, `return_pct`, `equity_curve`, `timestamps`, `trade_pnls`.
-
-To get a `BacktestResults` object with metric computation, wrap it:
+`run_backtest` returns a `BacktestResults` object directly. You can call `.compute()` on it immediately to calculate all performance metrics:
 
 ```python
-results = qc.BacktestResults(qc.run_backtest(
+results = qc.run_backtest(
     strategy=MyStrategy(),
     data={'AAPL': bars},
     initial_capital=100_000.0,
-))
+).compute()
+
+print(results)
+print(results.metrics)
 ```
 
 ### BacktestEngine (direct)
@@ -405,14 +426,14 @@ The engine raises an exception if:
 
 ### BacktestResults object
 
-Construct a `BacktestResults` by wrapping the dict returned from `run_backtest`:
+`run_backtest` returns a `BacktestResults` object directly:
 
 ```python
-results = qc.BacktestResults(qc.run_backtest(
+results = qc.run_backtest(
     strategy=MyStrategy(),
     data={'AAPL': bars},
     initial_capital=100_000.0,
-))
+)
 
 print(results)
 # ============================================================
@@ -743,9 +764,7 @@ risk_mgr.reset()                                 # clear all state
 
 ### Behavior on rejection
 
-A rejected order silently does not execute. The strategy is not notified; it simply does not receive a `FillEvent`. The engine continues running normally.
-
-If you need to detect rejections in strategy logic, check your position after expected fills do not arrive, or query `get_position()` in `on_data` before generating a signal.
+A rejected order does not execute. The strategy's `on_rejected(symbol, reason)` method is called so you can react — reduce targets, log, or halt. If you do not override `on_rejected` the rejection is silently discarded.
 
 ---
 
@@ -951,8 +970,10 @@ fig = plot_trade_analysis(entry_prices, exit_prices)
 All charts in one figure (equity curve, drawdown, returns distribution, rolling Sharpe, rolling volatility):
 
 ```python
+import matplotlib.pyplot as plt
+
 fig = plot_full_tearsheet(equity, returns, timestamps=timestamps)
-fig.show()
+plt.show(block=True)
 ```
 
 ### save_all_plots
@@ -1223,7 +1244,7 @@ if __name__ == '__main__':    # required on Windows
 
 Walk-forward analysis validates a strategy by repeatedly optimizing on an in-sample window and evaluating the best parameters on the following out-of-sample window. This guards against overfitting to a single historical period.
 
-> **Note:** `WalkForwardAnalyzer` currently supports single-asset data only. If you pass a multi-symbol dict, only the first symbol is used and the rest are silently ignored.
+> **Note:** `WalkForwardAnalyzer` currently supports single-asset data only. If you pass a multi-symbol dict, only the first symbol is used and a warning is raised.
 
 ### WalkForwardAnalyzer
 
@@ -1324,7 +1345,7 @@ print(f"\nMean OOS Sharpe: {np.mean(oos_sharpes):.2f}")
 
 `monte_carlo_validation` stress-tests a strategy by running it on many resampled versions of the price series and returning the distribution of outcomes. This measures how sensitive the strategy's performance is to the specific sequence of returns in the historical data.
 
-> **Note:** `monte_carlo_validation` currently supports single-asset data only. If you pass a multi-symbol dict, only the first symbol is used.
+> **Note:** `monte_carlo_validation` currently supports single-asset data only. If you pass a multi-symbol dict, only the first symbol is used and a warning is raised.
 
 ```python
 from quantcore.walk_forward import monte_carlo_validation

@@ -25,6 +25,12 @@ public:
         (void)event;
     }
 
+    // Called when a signal is rejected by risk limits, optional
+    virtual void on_rejected(const std::string& symbol, const std::string& reason) {
+        (void)symbol;
+        (void)reason;
+    }
+
     std::string get_name() const { return name_; }
 
     std::vector<std::shared_ptr<SignalEvent>> get_signals() {

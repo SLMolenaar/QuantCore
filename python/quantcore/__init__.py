@@ -141,16 +141,18 @@ def run_backtest(
         strategy: Strategy,
         data: Dict[str, List[BarData]],
         initial_capital: float = 100000.0,
-) -> Dict:
+) -> "BacktestResults":
     """
-    Run a complete backtest and return a results dictionary containing:
-    strategy, initial_capital, final_value, total_pnl, total_fees,
-    return_pct, equity_curve, timestamps, trade_pnls.
+    Run a complete backtest and return a BacktestResults object.
+
+    This is the recommended entry point for one-shot backtests. For more
+    control over execution config, position sizing, and risk limits, use
+    BacktestEngine directly.
     """
     engine      = create_backtest(initial_capital, data, strategy)
     final_value = engine.run()
 
-    return {
+    return BacktestResults({
         'strategy':        strategy.get_name(),
         'initial_capital': initial_capital,
         'final_value':     final_value,
@@ -160,7 +162,7 @@ def run_backtest(
         'equity_curve':    engine.get_equity_curve(),
         'timestamps':      engine.get_timestamps(),
         'trade_pnls':      engine.get_trade_pnls(),
-    }
+    })
 
 
 class BacktestResults:
