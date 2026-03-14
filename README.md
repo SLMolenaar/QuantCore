@@ -51,6 +51,7 @@ returns = calculate_returns(equity)
 print(calculate_all_metrics(equity))
 plot_full_tearsheet(equity, returns)
 ```
+For the full API reference and usage guide, see [docs/usage.md](docs/usage.md).
 
 ---
 
