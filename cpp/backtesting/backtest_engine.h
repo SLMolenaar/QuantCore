@@ -141,6 +141,9 @@ public:
 
         load_data();
 
+        // Record the initial state before any bars are processed.
+        // The equity curve will then have n_bars + 1 entries total:
+        // [initial_capital, after_bar_1, after_bar_2, ..., after_bar_n].
         equity_.push_back(init_cap_);
         timestamps_.push_back(first_bar_timestamp_);
 
@@ -163,11 +166,28 @@ public:
                 // some symbols have updated prices — this gives wildly wrong values
                 // including apparent negative equity. Only snapshot after ALL symbols
                 // for this timestamp have been processed, i.e. when the next event
-                // has a different (or no) timestamp.
-                bool is_last_event_for_bar = eq_.empty() ||
-                    eq_.peek()->get_timestamp() != event->get_timestamp();
+                // in the queue has a different timestamp (or the queue is empty, meaning
+                // this was the last market data event of the entire backtest).
+                //
+                // We compare against the next MARKET_DATA timestamp specifically,
+                // not just any event, so that pending SIGNAL/ORDER/FILL events with
+                // the same bar timestamp do not falsely trigger an early snapshot.
+                bool is_last_md_for_bar = true;
+                if (!eq_.empty()) {
+                    // Peek ahead: find the next MARKET_DATA event's timestamp.
+                    // Since the queue is a min-heap ordered by (timestamp, event_type)
+                    // and MARKET_DATA has the lowest EventType value, the next
+                    // MARKET_DATA event will always be at or after the current front.
+                    // A simpler and correct check: if the very next event is a
+                    // MARKET_DATA event with the same timestamp, we are not done yet.
+                    auto next = eq_.peek();
+                    if (next->get_type() == EventType::MARKET_DATA &&
+                        next->get_timestamp() == event->get_timestamp()) {
+                        is_last_md_for_bar = false;
+                    }
+                }
 
-                if (is_last_event_for_bar) {
+                if (is_last_md_for_bar) {
                     // Use curr_cap_ (computed from last_px_ in update_portfolio)
                     // rather than calc_portfolio_val() which uses orderbook mid prices.
                     // last_px_ is always the authoritative close price for each symbol.
@@ -181,7 +201,7 @@ public:
             }
         }
 
-        return calc_portfolio_val();
+        return curr_cap_;
     }
 
     double get_total_pnl() const {
