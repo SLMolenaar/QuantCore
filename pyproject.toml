@@ -17,7 +17,6 @@ dependencies = [
 keywords = ["trading", "backtesting", "algorithmic-trading", "quantitative-finance"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "Intended Audience :: Quantitative Finance Industry",
     "Intended Audience :: Financial and Insurance Industry",
     "Intended Audience :: Developers",
     "Topic :: Office/Business :: Financial :: Investment",
