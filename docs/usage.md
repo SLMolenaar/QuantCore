@@ -2,7 +2,7 @@
 
 This document covers everything you can do with QuantCore's Python interface. It assumes you have built the C++ extension and can `import quantcore as qc`. See the README for build instructions.
 
---- 
+---
 
 ## Table of Contents
 
@@ -17,7 +17,9 @@ This document covers everything you can do with QuantCore's Python interface. It
 9. [Visualizations](#9-visualizations)
 10. [Built-in Strategies](#10-built-in-strategies)
 11. [Multi-Asset Backtests](#11-multi-asset-backtests)
-12. [Parameter Sweeps](#12-parameter-sweeps)
+12. [Parameter Sweeps and Optimization](#12-parameter-sweeps-and-optimization)
+13. [Walk-Forward Analysis](#13-walk-forward-analysis)
+14. [Monte Carlo Validation](#14-monte-carlo-validation)
 
 ---
 
@@ -25,7 +27,7 @@ This document covers everything you can do with QuantCore's Python interface. It
 
 ### From CSV
 
-The CSV loader expects columns: `timestamp`, `open`, `high`, `low`, `close`, `volume`. Timestamps can be Unix epoch integers (any unit; the loader detects seconds, milliseconds, microseconds, nanoseconds) or ISO 8601 strings.
+The CSV loader expects columns: `timestamp`, `open`, `high`, `low`, `close`, `volume`. Timestamps can be Unix epoch integers (any unit; the loader detects seconds, milliseconds, microseconds, nanoseconds) or ISO 8601 strings. The file can have 6 columns (timestamp + OHLCV) or 7 columns (symbol + timestamp + OHLCV).
 
 ```python
 import quantcore as qc
@@ -33,23 +35,43 @@ import quantcore as qc
 bars = qc.load_csv_data('data/aapl.csv', 'AAPL')
 ```
 
-The first argument is the filepath. The second is the symbol name that will appear in `MarketDataEvent.symbol`. The loader returns a `List[BarData]`.
+The first argument is the filepath. The second is the symbol name assigned when the file has no symbol column. The loader returns a `List[BarData]`.
 
-You can also use `CSVDataLoader` directly if you need lower-level access:
+You can also call `CSVDataLoader` directly for lower-level access, including control over the skip threshold:
 
 ```python
-bars = qc.CSVDataLoader.load('data/aapl.csv', 'AAPL')
+bars = qc.CSVDataLoader.load(
+    'data/aapl.csv',
+    symbol='AAPL',
+    has_header=True,
+    max_skip_pct=0.20   # raise an error if more than 20% of rows fail to parse
+)
 ```
+
+`max_skip_pct` defaults to `0.20`. Set it lower to enforce stricter data quality.
 
 ### From Parquet
 
 ```python
 from quantcore import load_parquet_data
 
+# Returns List[BarData] — same as load_csv_data
 bars = load_parquet_data('data/aapl.parquet', symbol='AAPL')
+
+# Returns a (N, 6) float64 numpy array — faster path for add_data (see below)
+arr = load_parquet_data('data/aapl.parquet', symbol='AAPL', use_numpy=True)
 ```
 
-The Parquet loader accepts any column naming convention that maps to the five required fields (timestamp, open, high, low, close, volume). It handles `datetime64` index columns and integer epoch columns in all common units.
+The Parquet loader accepts any column naming convention that maps to the five required fields. It handles `datetime64` index columns and integer epoch columns in all common units. You can also call `ParquetDataLoader` directly:
+
+```python
+from quantcore import ParquetDataLoader
+
+bars = ParquetDataLoader.load('data/aapl.parquet', symbol='AAPL')  # List[BarData]
+arr  = ParquetDataLoader.load_numpy('data/aapl.parquet')            # (N, 6) float64 ndarray
+```
+
+`load_numpy` returns columns in the order `[timestamp_ns, open, high, low, close, volume]` and is designed for the fast numpy `add_data` overload (see [Running a Backtest](#3-running-a-backtest)).
 
 ### BarData fields
 
@@ -63,8 +85,11 @@ bar.high          # float
 bar.low           # float
 bar.close         # float
 bar.volume        # float
-bar.typical_price()   # (high + low + close) / 3
-bar.mid_price()       # (high + low) / 2
+
+bar.typical_price()  # (high + low + close) / 3
+bar.range()          # high - low
+bar.is_bullish()     # bool, True if close > open
+bar.is_bearish()     # bool, True if close < open
 ```
 
 ### Inspecting loaded data
@@ -95,14 +120,51 @@ class MyStrategy(qc.Strategy):
 
 ### MarketDataEvent fields
 
+Fields are accessible as both attributes and getter methods — both styles work and are used interchangeably:
+
 ```python
+# Attribute access
 event.symbol        # str
-event.timestamp_ns  # int
+event.timestamp_ns  # int  (nanoseconds since epoch)
 event.open          # float
 event.high          # float
 event.low           # float
 event.close         # float  (use this as "current price")
 event.volume        # float
+
+# Equivalent getter methods
+event.get_symbol()      # str
+event.get_timestamp()   # int  (nanoseconds since epoch)
+event.get_open()        # float
+event.get_high()        # float
+event.get_low()         # float
+event.get_close()       # float
+event.get_volume()      # float
+event.get_price()       # float  (alias for get_close)
+```
+
+### FillEvent fields
+
+`on_fill` receives a `FillEvent` with the following fields:
+
+```python
+fill.get_symbol()     # str
+fill.get_timestamp()  # int, nanoseconds since epoch
+fill.get_order_id()   # int
+fill.get_side()       # qc.Side.BUY or qc.Side.SELL
+fill.get_quantity()   # float, shares filled
+fill.get_price()      # float, fill price (after slippage)
+fill.get_commission() # float, fee charged
+fill.get_total_cost() # float, notional ± commission
+
+# Also available as read-only attributes
+fill.symbol
+fill.timestamp_ns
+fill.order_id
+fill.side
+fill.quantity
+fill.price
+fill.commission
 ```
 
 ### Generating signals
@@ -114,11 +176,11 @@ self.generate_signal(
     symbol,            # str
     qc.SignalType.BUY, # or SELL, HOLD
     1.0,               # signal strength, 0.0–1.0, scales position size
-    event.timestamp_ns # timestamp to stamp the signal
+    event.get_timestamp()
 )
 ```
 
-`SignalType.HOLD` is a no-op and is provided for explicitness in strategies that want to log a neutral state.
+`SignalType.HOLD` is a no-op provided for explicitness in strategies that want to log a neutral state.
 
 ### Checking current position
 
@@ -129,12 +191,19 @@ has_pos  = self.has_position(symbol)  # bool, True if abs(position) > 0
 
 ### Accessing portfolio state
 
+`PortfolioContext` is available inside `on_data` and `on_fill` via `self.get_portfolio()`. It returns `None` before the engine attaches it at `run()`, so guard accordingly:
+
 ```python
-portfolio = self.get_portfolio()  # PortfolioContext, or None if not yet attached
+# Inside on_data or on_fill:
+portfolio = self.get_portfolio()   # PortfolioContext, or None if called before run()
 if portfolio:
-    cash  = portfolio.get_cash()
-    value = portfolio.get_portfolio_value()
+    cash    = portfolio.get_cash()
+    value   = portfolio.get_portfolio_value()
+    pos     = portfolio.get_position('AAPL')
+    weight  = portfolio.get_position_weight('AAPL')
 ```
+
+See [PortfolioContext](#portfoliocontext) for the full API.
 
 ### A complete example
 
@@ -177,6 +246,9 @@ class ZScoreMeanReversion(qc.Strategy):
             self.generate_signal(sym, qc.SignalType.SELL, 1.0, event.get_timestamp())
         elif position < 0 and z_score < self.exit_z:
             self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.get_timestamp())
+
+    def on_fill(self, fill):
+        print(f"Filled: {fill.get_side()} {fill.get_quantity()} @ {fill.get_price():.2f}")
 ```
 
 ### Using signal strength
@@ -198,14 +270,24 @@ self.generate_signal(sym, qc.SignalType.BUY, 0.5, event.get_timestamp())
 ### run_backtest (convenience function)
 
 ```python
-results = qc.run_backtest(
+results_dict = qc.run_backtest(
     strategy=MyStrategy(),
     data={'AAPL': qc.load_csv_data('data/aapl.csv', 'AAPL')},
     initial_capital=100_000.0,
 )
 ```
 
-This is the recommended entry point. It constructs a `BacktestEngine`, loads data, runs, and returns a `BacktestResults` object.
+`run_backtest` returns a plain **dict**, not a `BacktestResults` object. Keys: `strategy`, `initial_capital`, `final_value`, `total_pnl`, `total_fees`, `return_pct`, `equity_curve`, `timestamps`, `trade_pnls`.
+
+To get a `BacktestResults` object with metric computation, wrap it:
+
+```python
+results = qc.BacktestResults(qc.run_backtest(
+    strategy=MyStrategy(),
+    data={'AAPL': bars},
+    initial_capital=100_000.0,
+))
+```
 
 ### BacktestEngine (direct)
 
@@ -220,7 +302,22 @@ engine.set_strategy(MyStrategy())
 final_value = engine.run()
 ```
 
-`run()` returns the final portfolio value as a `float`. It also resets internal state, so you can call it multiple times (useful for parameter sweeps).
+`run()` returns the final portfolio value as a `float`. It resets all internal state first, so you can call it multiple times on the same engine (useful for parameter sweeps).
+
+Passing zero or negative initial capital raises an exception.
+
+### Fast data loading with numpy
+
+`add_data` accepts either a `List[BarData]` or a `(N, 6)` float64 numpy array with columns `[timestamp_ns, open, high, low, close, volume]`. The numpy path uses a single boundary crossing instead of N individual pybind11 object constructions and is roughly 3–5x faster for large datasets:
+
+```python
+import numpy as np
+
+arr = qc.ParquetDataLoader.load_numpy('data/aapl.parquet')  # (N, 6) float64
+engine.add_data('AAPL', arr)
+```
+
+Note: `timestamp_ns` is stored as `float64` in the array. `float64` has a 53-bit mantissa so timestamps beyond year 2255 lose sub-microsecond precision — fine for current UNIX nanosecond timestamps.
 
 ### Passing an ExecutionConfig
 
@@ -239,6 +336,9 @@ engine = qc.BacktestEngine(100_000.0, config)
 ```python
 sizer = qc.FixedPercentage(0.10)  # 10% of capital per trade
 engine.set_position_sizer(sizer)
+
+# Retrieve the currently configured sizer
+sizer = engine.get_position_sizer()
 ```
 
 ### Passing RiskLimits
@@ -252,9 +352,32 @@ limits.max_loss_pct     = 0.15
 engine.set_risk_limits(limits)
 ```
 
+### Bars per year
+
+The engine uses a `bars_per_year` value to annualize volatility internally (used by `VolatilityTargeting` and the rolling volatility estimate passed to position sizers). The default is `252` (daily bars). Override when using intraday or weekly bars:
+
+```python
+engine.set_bars_per_year(252)      # daily bars (default)
+engine.set_bars_per_year(52)       # weekly bars
+engine.set_bars_per_year(0)        # raises an exception
+print(engine.get_bars_per_year())  # int
+```
+
+### Configuring the market maker
+
+The engine runs a synthetic market maker to ensure strategies always have liquidity to trade against. The defaults work for most backtests; override them to simulate tighter or wider spreads:
+
+```python
+engine.configure_market_maker(
+    levels=5,       # number of price levels per side
+    spread=0.0001,  # base spread as a fraction of price (0.01%)
+    depth=100_000   # base quantity at each level
+)
+```
+
 ### create_backtest
 
-`create_backtest` is an alternative to `run_backtest` that returns the engine without running it, letting you configure it further before calling `run()`:
+`create_backtest` returns a configured engine without running it:
 
 ```python
 engine = qc.create_backtest(
@@ -266,15 +389,31 @@ engine.set_position_sizer(qc.RiskBased(0.01))
 engine.run()
 ```
 
+### Error conditions
+
+The engine raises an exception if:
+
+- `run()` is called without a strategy set
+- `run()` is called without any data loaded
+- `set_strategy(None)` or `set_position_sizer(None)` is called
+- An empty bar series is passed to `add_data`
+- Initial capital is zero or negative
+
 ---
 
 ## 4. Reading Results
 
 ### BacktestResults object
 
-`run_backtest` returns a `BacktestResults` instance:
+Construct a `BacktestResults` by wrapping the dict returned from `run_backtest`:
 
 ```python
+results = qc.BacktestResults(qc.run_backtest(
+    strategy=MyStrategy(),
+    data={'AAPL': bars},
+    initial_capital=100_000.0,
+))
+
 print(results)
 # ============================================================
 #   Backtest Results - MyStrategy
@@ -300,18 +439,19 @@ results.net_pnl          # float (property: final_value - initial_capital)
 results.return_pct       # float
 results.equity_curve     # List[float]
 results.timestamps       # List[int], nanoseconds
+results.trade_pnls       # List[float], per-trade PnL for all closed trades
 ```
 
 ### Computing metrics
 
-Call `.compute()` to calculate all performance metrics and cache them on the object:
+Call `.compute()` to calculate all performance metrics and cache them on the object. Returns `self` for chaining:
 
 ```python
 results.compute()
 print(results.metrics)
 ```
 
-The `metrics` property raises `RuntimeError` if you access it before calling `compute()`.
+The `metrics` property raises `RuntimeError` if accessed before calling `compute()`.
 
 ### Reading from the engine directly
 
@@ -320,12 +460,11 @@ If you used `BacktestEngine` directly:
 ```python
 engine.get_total_pnl()         # float
 engine.get_total_fees()        # float
+engine.get_trade_pnls()        # List[float], PnL of every closed trade
 engine.get_equity_curve()      # List[float]
 engine.get_timestamps()        # List[int]
 engine.get_portfolio_context() # PortfolioContext
 ```
-
-`PortfolioContext` exposes current capital, equity, and a per-symbol position map.
 
 ---
 
@@ -339,7 +478,7 @@ config = qc.ExecutionConfig()
 config.maker_fee    = 0.001      # Fraction of notional, applied when order adds liquidity
 config.taker_fee    = 0.002      # Fraction of notional, applied when order removes liquidity
 config.slippage_pct = 0.0005     # Fraction of price, applied in direction of trade
-config.latency_ns   = 1_000_000  # Nanoseconds delay between signal and order reaching the book
+config.latency_ns   = 1_000_000  # Nanoseconds delay between signal and fill
 ```
 
 Fees and slippage are applied per fill. For a 100-share buy at $100 with `taker_fee=0.002` and `slippage_pct=0.0005`:
@@ -349,27 +488,34 @@ Fees and slippage are applied per fill. For a 100-share buy at $100 with `taker_
 
 ### Order types
 
-The order type determines how the order is handled if it cannot be fully filled immediately:
-
 ```python
-qc.OrderType.GOOD_TILL_CANCEL   # Rests on the book until filled or canceled
-qc.OrderType.MARKET             # Fills at best available price, no resting
+qc.OrderType.GOOD_TILL_CANCEL    # Rests on the book until filled or canceled (default)
+qc.OrderType.MARKET              # Fills at best available price, no resting
 qc.OrderType.IMMEDIATE_OR_CANCEL # Fills what it can immediately, cancels the rest
-qc.OrderType.FILL_OR_KILL       # Fills entirely or not at all
-qc.OrderType.GOOD_FOR_DAY       # Canceled at end of session if unfilled
+qc.OrderType.FILL_OR_KILL        # Fills entirely or not at all
+qc.OrderType.GOOD_FOR_DAY        # Canceled at end of session if unfilled
 ```
-
-The default order type used by the engine when converting a signal is `GOOD_TILL_CANCEL`. The order book simulates partial fills correctly for limit orders.
 
 ### ExecutionEngine (per-symbol access)
 
 ```python
-exec_engine = engine.get_execution_engine('AAPL')
+ee = engine.get_execution_engine('AAPL')
+# Returns None if the symbol was never loaded via add_data
 
-exec_engine.get_position()      # float, shares held (negative = short)
-exec_engine.get_realized_pnl()  # float
-exec_engine.get_total_fees()    # float
+ee.get_position()          # float, shares held (negative = short)
+ee.get_average_price()     # float, volume-weighted average entry price
+ee.get_realized_pnl()      # float
+ee.get_unrealized_pnl()    # float, mark-to-market on the open position
+ee.get_total_pnl()         # float, realized + unrealized
+ee.get_total_fees()        # float
+ee.get_best_bid()          # float, best resting bid price in dollars
+ee.get_best_ask()          # float, best resting ask price in dollars
+ee.get_mid_price()         # float | None, (best_bid + best_ask) / 2
+ee.get_closed_trade_pnls() # List[float], PnL of each completed round-trip
+ee.reset()                 # clear all state (called automatically at run())
 ```
+
+All fields return zero (or `None` for `get_mid_price()`) before `run()` is called.
 
 ---
 
@@ -399,7 +545,7 @@ engine.set_volatility_params(
 )
 ```
 
-`set_volatility_params` controls the `stop_loss_distance` the engine injects into every `PositionSizingContext`. Without it the stop distance falls back to the engine's internal default and `RiskBased` will produce zero sizes. In practice, set `stop_distance` to a fixed ATR-based estimate before running.
+`set_volatility_params` controls the `stop_loss_distance` injected into every `PositionSizingContext`. Without it the stop distance falls back to the engine's internal default and `RiskBased` will produce zero sizes. In practice, set `stop_distance` to a fixed ATR-based estimate before running.
 
 ### KellyCriterion
 
@@ -420,7 +566,7 @@ sizer.set_max_leverage(1.0)  # No leverage
 Divides capital equally across `n` positions.
 
 ```python
-sizer = qc.EqualWeight(n_positions=5)  # 20% per position
+sizer = qc.EqualWeight(num_positions=5)  # 20% per position
 ```
 
 ### VolatilityTargeting
@@ -428,10 +574,10 @@ sizer = qc.EqualWeight(n_positions=5)  # 20% per position
 Scales leverage to hit a target annualized portfolio volatility.
 
 ```python
-sizer = qc.VolatilityTargeting(target_vol=0.15)  # Target 15% annualized vol
+sizer = qc.VolatilityTargeting(target_volatility=0.15)  # Target 15% annualized vol
 ```
 
-Requires `portfolio_volatility` in the context. The engine provides a running volatility estimate if you have sufficient history; otherwise the sizer returns zero until enough data is available.
+The engine provides a running volatility estimate after sufficient history is available; the sizer returns zero until then. Set `bars_per_year` on the engine to ensure correct annualization (see [Bars per year](#bars-per-year)).
 
 ### FixedShares
 
@@ -447,39 +593,84 @@ All sizers support the same constraint API:
 
 ```python
 sizer.set_max_position_size(500)   # Max 500 shares per position
-sizer.set_min_position_size(10)    # Don't order fewer than 10 shares
+sizer.set_min_position_size(10)    # Orders below this size are dropped entirely
 sizer.set_max_leverage(2.0)        # Notional cannot exceed 2x capital
 ```
 
+### Retrieving the active sizer
+
+```python
+sizer = engine.get_position_sizer()
+```
+
+### PositionSizingContext
+
+`PositionSizingContext` is the data object the engine builds and passes to the sizer on every signal. You can construct one manually to test a sizer in isolation:
+
+```python
+ctx = qc.PositionSizingContext(
+    signal_strength=1.0,
+    current_capital=100_000.0,
+    current_price=150.0,
+    current_position=0.0,
+    portfolio_volatility=0.02,
+    stop_loss_distance=0.05
+)
+shares = sizer.calculate_size(ctx)
+```
+
+All fields are read-write.
+
 ### Python-side utilities: PositionCalculator
 
-`PositionCalculator` is a standalone Python class for pre-trade sizing calculations outside the engine (useful in research notebooks):
+`PositionCalculator` is a standalone Python class for pre-trade sizing calculations outside the engine (useful in research notebooks). Methods return a `PositionSizeResult` with `.quantity`, `.notional_value`, `.percent_of_capital`, and `.reasoning` — not a plain float:
 
 ```python
 from quantcore import PositionCalculator
 
-calc = PositionCalculator(capital=100_000.0)
+calc = PositionCalculator(capital=100_000.0, max_position_pct=0.2)
 
-shares = calc.fixed_percentage(price=150.0, pct=0.10)
-shares = calc.risk_based(price=150.0, stop_price=145.0, risk_pct=0.01)
-shares = calc.kelly(win_rate=0.55, avg_win=0.02, avg_loss=0.01, price=150.0)
-shares = calc.equal_weight(price=150.0, n_positions=5)
+result = calc.fixed_percentage(price=150.0, percentage=0.10)
+result = calc.risk_based(price=150.0, stop_loss_price=145.0, risk_per_trade=0.01)
+result = calc.kelly_criterion(price=150.0, win_rate=0.55, avg_win=0.02, avg_loss=0.01)
+result = calc.equal_weight(price=150.0, num_positions=5)
+result = calc.volatility_adjusted(price=150.0, volatility=0.20, target_volatility=0.15)
+result = calc.leveraged(price=150.0, leverage=2.0, base_percentage=0.10)
+
+print(result.quantity)            # shares to order
+print(result.notional_value)      # $ exposure
+print(result.percent_of_capital)  # fraction of capital used
+print(result.reasoning)           # human-readable explanation
 ```
 
 ### PortfolioPositionSizer
 
-For multi-asset research, `PortfolioPositionSizer` computes sizes for an entire portfolio at once:
+`PortfolioPositionSizer` enforces portfolio-level exposure limits across multiple open positions. It is a research utility, not connected to the engine's internal sizing:
 
 ```python
 from quantcore import PortfolioPositionSizer
 
-sizer = PortfolioPositionSizer(capital=100_000.0)
-
-allocations = sizer.equal_weight(
-    symbols=['AAPL', 'GOOGL', 'MSFT'],
-    prices={'AAPL': 175.0, 'GOOGL': 140.0, 'MSFT': 420.0}
+sizer = PortfolioPositionSizer(
+    capital=100_000.0,
+    max_total_exposure=1.0,    # max gross notional / capital
+    max_single_position=0.20,  # max single-asset notional / capital
 )
-# Returns dict: {'AAPL': 190, 'GOOGL': 238, 'MSFT': 79}
+
+# Update tracked notional after a fill
+sizer.update_position('AAPL', notional_value=15_000.0)
+sizer.update_position('MSFT', notional_value=12_000.0)
+sizer.update_position('MSFT', notional_value=0.0)  # clear a position
+
+print(sizer.get_total_exposure())    # float, current gross exposure as fraction of capital
+print(sizer.get_available_capital()) # float, remaining notional budget in dollars
+
+# Check before submitting an order
+allowed, reason = sizer.can_add_position('GOOGL', notional_value=20_000.0)
+
+# Size a new position respecting all constraints; returns None if no room
+result = sizer.size_new_position('GOOGL', price=140.0, desired_percentage=0.10)
+if result:
+    print(result.quantity)
 ```
 
 ---
@@ -494,15 +685,21 @@ limits = qc.RiskLimits()
 limits.enabled            = True   # Set False to disable all checks
 limits.max_position_pct   = 0.20   # Max position value / capital (per symbol)
 limits.max_leverage       = 2.0    # Max total notional / capital
-limits.max_loss_pct       = 0.15   # Halt if drawdown from peak exceeds this
+limits.max_loss_pct       = 0.50   # Halt if drawdown from initial capital exceeds this
 limits.max_order_value    = 50_000 # Max notional per single order (0 = no limit)
 ```
+
+`limits.validate()` checks that all field values are within acceptable ranges and raises `ValueError` if not. It is called automatically when limits are attached to the engine, but you can call it manually to catch bad values early.
 
 ### Attaching limits to the engine
 
 ```python
 engine.set_risk_limits(limits)
 retrieved = engine.get_risk_limits()
+
+print(retrieved.max_leverage)      # float
+print(retrieved.max_loss_pct)      # float
+print(retrieved.max_position_pct)  # float
 ```
 
 ### RiskManager (direct access)
@@ -510,6 +707,7 @@ retrieved = engine.get_risk_limits()
 ```python
 risk_mgr = engine.get_risk_manager()
 
+# Check whether a hypothetical order would be approved
 response = risk_mgr.check_order('AAPL', qc.Side.BUY, quantity=100, price=175.0)
 
 if response.is_approved():
@@ -518,13 +716,36 @@ else:
     print(f"Rejected: {response.result}, {response.reason}")
 ```
 
-`RiskCheckResult` values: `APPROVED`, `REJECTED_POSITION_LIMIT`, `REJECTED_LEVERAGE`, `REJECTED_MAX_LOSS`, `REJECTED_ORDER_SIZE`.
+`RiskCheckResult` enum values:
+
+```python
+qc.RiskCheckResult.APPROVED
+qc.RiskCheckResult.REJECTED_POSITION_LIMIT   # per-symbol notional limit breached
+qc.RiskCheckResult.REJECTED_LEVERAGE_LIMIT   # total portfolio leverage limit breached
+qc.RiskCheckResult.REJECTED_CAPITAL_LIMIT    # no capital available
+qc.RiskCheckResult.REJECTED_LOSS_LIMIT       # max drawdown limit exceeded
+qc.RiskCheckResult.REJECTED_ORDER_SIZE       # single-order notional limit breached
+```
+
+The full `RiskManager` API:
+
+```python
+risk_mgr.set_capital(initial, current)           # update the capital figures used for checks
+risk_mgr.set_position(symbol, quantity, price)   # record a position with its last-known price
+risk_mgr.get_position(symbol)                    # float, tracked quantity
+risk_mgr.set_limits(limits)                      # replace the active RiskLimits
+risk_mgr.get_limits()                            # RiskLimits
+risk_mgr.update_position(symbol, side, quantity) # update quantity only (no price update)
+risk_mgr.get_all_positions()                     # dict[str, float]
+risk_mgr.calculate_total_exposure()              # float, sum of abs notional across all positions
+risk_mgr.reset()                                 # clear all state
+```
 
 ### Behavior on rejection
 
-A rejected order silently does not execute. The strategy is not notified of the rejection; it simply does not receive a `FillEvent`. The engine continues running normally.
+A rejected order silently does not execute. The strategy is not notified; it simply does not receive a `FillEvent`. The engine continues running normally.
 
-If you need to detect rejections in strategy logic, check your position after expected fills do not arrive, or query `get_position()` on `on_data` before generating a signal.
+If you need to detect rejections in strategy logic, check your position after expected fills do not arrive, or query `get_position()` in `on_data` before generating a signal.
 
 ---
 
@@ -545,8 +766,8 @@ from quantcore.analytics import (
     underwater_plot_data,
 )
 
-equity     = np.array(results.equity_curve)
-timestamps = np.array(results.timestamps)
+equity     = np.array(engine.get_equity_curve())
+timestamps = np.array(engine.get_timestamps())
 returns    = calculate_returns(equity)
 ```
 
@@ -556,7 +777,7 @@ Converts an equity curve to period returns:
 
 ```python
 returns = calculate_returns(equity)
-# array of floats, length len(equity) - 1
+# np.ndarray, length len(equity) - 1
 # returns[i] = (equity[i+1] - equity[i]) / equity[i]
 ```
 
@@ -573,19 +794,14 @@ print(metrics)
 # Sortino Ratio:    2.01
 # Calmar Ratio:     1.35
 # Max Drawdown:     -8.74%
-# Win Rate:         58.3%
-# Profit Factor:    1.82
-# Avg Win:          $124.00
-# Avg Loss:         $-68.00
-# Largest Win:      $341.00
-# Largest Loss:     $-187.00
+# ...
 ```
 
 To include trade-level metrics, pass a list of per-trade PnL values:
 
 ```python
-metrics = calculate_all_metrics(equity, trade_pnls=[100.0, -50.0, 200.0])
-print(metrics.total_trades)   # 3
+metrics = calculate_all_metrics(equity, trade_pnls=engine.get_trade_pnls())
+print(metrics.total_trades)   # int
 print(metrics.win_rate)       # float, 0–100
 print(metrics.profit_factor)  # float
 ```
@@ -604,18 +820,20 @@ from quantcore.analytics import (
     analyze_trades,
 )
 
-total_return = calculate_total_return(equity)                        # float, %
+total_return = calculate_total_return(equity)                              # float, %
 ann_ret      = calculate_annualized_return(equity, periods_per_year=252)  # float, %
-sharpe       = calculate_sharpe_ratio(returns)                       # float
-sortino      = calculate_sortino_ratio(returns)                      # float
-vol          = calculate_volatility(returns, periods_per_year=252)   # float, %
-max_dd, dur  = calculate_max_drawdown(equity)                        # (float %, int bars)
-calmar       = calculate_calmar_ratio(ann_ret, max_dd)               # float
+sharpe       = calculate_sharpe_ratio(returns)                            # float
+sortino      = calculate_sortino_ratio(returns)                           # float
+vol          = calculate_volatility(returns, periods_per_year=252)        # float, %
+max_dd, dur  = calculate_max_drawdown(equity)                             # (float %, int bars)
+calmar       = calculate_calmar_ratio(ann_ret, max_dd)                    # float
 
 trade_stats  = analyze_trades([100.0, -50.0, 200.0, -30.0, 80.0])
 # dict with keys: total_trades, win_rate, profit_factor,
 #                 avg_win, avg_loss, largest_win, largest_loss
 ```
+
+`analyze_trades([])` returns a dict with `total_trades == 0` and safe zero values for all other keys.
 
 ### Rolling metrics
 
@@ -641,7 +859,7 @@ print(monthly)
 
 ```python
 dd = underwater_plot_data(equity)
-# np.ndarray, same length as equity_curve
+# np.ndarray, same length as equity
 # values are drawdown % from running peak, always <= 0
 ```
 
@@ -649,7 +867,7 @@ dd = underwater_plot_data(equity)
 
 ## 9. Visualizations
 
-All plotting functions live in `quantcore.plotting` and return `matplotlib.figure.Figure`. You can call `.show()` on the returned figure or save it.
+All plotting functions live in `quantcore.plotting` and return `matplotlib.figure.Figure`.
 
 ```python
 from quantcore.plotting import (
@@ -687,7 +905,7 @@ fig = plot_underwater(equity, timestamps=timestamps)
 
 ### plot_returns_distribution
 
-Histogram of period returns with mean line:
+Histogram of period returns with mean line and Q-Q plot:
 
 ```python
 fig = plot_returns_distribution(returns, title="Return Distribution")
@@ -757,11 +975,11 @@ save_all_plots(
 
 ## 10. Built-in Strategies
 
-These are available as both C++ classes (for performance) and as Python subclasses via pybind11.
+These are available as C++ classes exposed via pybind11.
 
 ### BuyAndHold
 
-Buys on the first bar, holds until the end. Used as a benchmark and in tests.
+Buys on the first bar per symbol, holds until the end. Used as a benchmark.
 
 ```python
 strategy = qc.BuyAndHold()
@@ -788,11 +1006,14 @@ strategy = qc.MeanReversion(
     entry_threshold=1.5,
     exit_threshold=0.5
 )
+
+# After run(), query how many signals were generated
+count = strategy.get_signal_count()  # int, >= 0
 ```
 
 ### PairsTrading
 
-Statistical arbitrage on two correlated assets. Monitors the spread, buys the underperformer and sells the outperformer when the spread diverges beyond a threshold.
+Statistical arbitrage on two correlated assets. Monitors the log spread `log(price1 / price2)`, buys the underperformer and sells the outperformer when the spread diverges beyond a z-score threshold, exits when it reverts.
 
 ```python
 strategy = qc.PairsTrading(
@@ -802,26 +1023,26 @@ strategy = qc.PairsTrading(
     entry_zscore=2.0,
     exit_zscore=0.5
 )
+
+# Check whether the strategy currently has an open spread position
+currently_trading = strategy.in_trade()  # bool
 ```
 
-Requires both symbols to be loaded via `add_data` or passed in the `data` dict.
+Requires both symbols to be loaded via `add_data`.
 
 ---
 
 ## 11. Multi-Asset Backtests
 
-Pass multiple symbols in the `data` dict. The engine interleaves their bars in timestamp order automatically.
+Pass multiple symbols via `add_data`. The engine interleaves their bars in timestamp order automatically.
 
 ```python
-results = qc.run_backtest(
-    strategy=MyMultiAssetStrategy(),
-    data={
-        'AAPL':  qc.load_csv_data('data/aapl.csv',  'AAPL'),
-        'GOOGL': qc.load_csv_data('data/googl.csv', 'GOOGL'),
-        'MSFT':  qc.load_csv_data('data/msft.csv',  'MSFT'),
-    },
-    initial_capital=100_000.0,
-)
+engine = qc.BacktestEngine(100_000.0)
+engine.add_data('AAPL',  qc.load_csv_data('data/aapl.csv',  'AAPL'))
+engine.add_data('GOOGL', qc.load_csv_data('data/googl.csv', 'GOOGL'))
+engine.add_data('MSFT',  qc.load_csv_data('data/msft.csv',  'MSFT'))
+engine.set_strategy(MyMultiAssetStrategy())
+engine.run()
 ```
 
 Inside the strategy, `event.get_symbol()` tells you which asset triggered the call:
@@ -830,29 +1051,115 @@ Inside the strategy, `event.get_symbol()` tells you which asset triggered the ca
 class MultiAssetStrategy(qc.Strategy):
     def on_data(self, event):
         if event.get_symbol() == 'AAPL':
-            # AAPL-specific logic
-            pass
+            pass  # AAPL-specific logic
         elif event.get_symbol() == 'GOOGL':
-            # GOOGL-specific logic
-            pass
+            pass  # GOOGL-specific logic
 ```
 
 Capital is shared across all positions. The position sizer and risk limits apply per-symbol.
 
+### PortfolioContext
+
+`engine.get_portfolio_context()` returns the full portfolio state after `run()`. The same object is accessible inside strategies via `self.get_portfolio()`:
+
+```python
+portfolio = engine.get_portfolio_context()
+
+portfolio.get_initial_capital()        # float, capital passed to BacktestEngine
+portfolio.get_cash()                   # float, uninvested cash
+portfolio.get_portfolio_value()        # float, cash + mark-to-market value of all positions
+portfolio.get_total_position_value()   # float, gross market value of all open positions
+portfolio.get_leverage()               # float, total notional / portfolio value
+portfolio.num_positions()              # int, number of symbols with a non-zero position
+portfolio.has_position('AAPL')         # bool
+portfolio.get_position('AAPL')         # float, shares held (negative = short)
+portfolio.get_position_value('AAPL')   # float, shares × last price
+portfolio.get_position_weight('AAPL')  # float, position value / portfolio value
+portfolio.get_price('AAPL')            # float, last known price
+portfolio.get_all_positions()          # dict[str, float], all non-zero positions
+portfolio.get_all_prices()             # dict[str, float], last known price per symbol
+```
+
 ---
 
-## 12. Parameter Sweeps
+## 12. Parameter Sweeps and Optimization
 
-The engine is reentrant: `run()` resets internal state and can be called multiple times. Use this for grid searches.
+### GridSearchOptimizer (recommended)
 
-### Simple grid search
+`GridSearchOptimizer` is the high-level API for parameter optimization. It handles the grid, runs each combination, and returns results sorted by the chosen metric:
+
+```python
+from quantcore.walk_forward import GridSearchOptimizer
+
+bars = qc.load_csv_data('data/aapl.csv', 'AAPL')
+data = {'AAPL': bars}
+
+param_grid = {
+    'fast_period': [10, 20, 50],
+    'slow_period': [100, 150, 200],
+}
+
+opt = GridSearchOptimizer(
+    strategy_factory=qc.SMACrossover,  # must be a class or module-level function, not a lambda
+    param_grid=param_grid,
+    metric='sharpe_ratio',             # 'sharpe_ratio', 'total_return', 'max_drawdown', 'num_trades', or 'final_value'
+    n_jobs=1,                          # set to -1 for all cores (see parallelism note below)
+)
+
+results = opt.optimize(data, initial_capital=100_000.0, verbose=True)
+
+best = results[0]
+print(f"Best params: {best.params}")
+print(f"Sharpe: {best.sharpe_ratio:.2f}")
+print(f"Return: {best.total_return_pct:.2f}%")
+print(f"Max DD: {best.max_drawdown_pct:.2f}%")
+
+# Get top 10
+top10 = opt.get_top_n(10)
+
+# Export to DataFrame
+df = opt.get_results_dataframe()
+print(df[['fast_period', 'slow_period', 'sharpe_ratio', 'total_return_pct']].head())
+```
+
+**`OptimizationResult` fields:**
+
+```python
+result.params           # dict, e.g. {'fast_period': 20, 'slow_period': 100}
+result.sharpe_ratio     # float
+result.total_return     # float, DECIMAL format (0.105 = 10.5%)
+result.total_return_pct # float, percentage format (10.5)    — use this for display
+result.max_drawdown     # float, DECIMAL format (-0.05 = -5%)
+result.max_drawdown_pct # float, percentage format (-5.0)    — use this for display
+result.num_trades       # int
+result.final_value      # float
+```
+
+> **Note on decimal vs percentage format:** `total_return` and `max_drawdown` on `OptimizationResult` use **decimal format** (0.105 = 10.5%), unlike `PerformanceMetrics` from `calculate_all_metrics` which uses percentage format (10.5). Use the `_pct` properties for display, or the helpers from `walk_forward` if you need to convert programmatically:
+>
+> ```python
+> from quantcore.walk_forward import pct_to_decimal, decimal_to_pct
+>
+> decimal_to_pct(0.105)   # → 10.5
+> pct_to_decimal(10.5)    # → 0.105
+> ```
+
+### Parallelism
+
+`n_jobs` controls worker processes. `n_jobs=-1` uses all available cores. Key constraints:
+
+- `strategy_factory` must be **picklable** — pass a class or a module-level function, not a lambda or closure. Lambdas will raise `PicklingError` at runtime.
+- On Windows, guard your entry point with `if __name__ == '__main__':`.
+- Process spawn overhead on Windows is ~500 ms per worker. Parallelism only pays off when each combo takes substantially longer than that (e.g. 100-year backtests at ~240 ms each give a clear speedup; 5-year backtests at ~11 ms each do not). On Linux (`fork`-based), the break-even point is much lower.
+
+### Manual grid search
+
+For cases where you need full control:
 
 ```python
 import itertools
 import numpy as np
 from quantcore.analytics import calculate_sharpe_ratio, calculate_returns
-
-bars = qc.load_csv_data('data/aapl.csv', 'AAPL')
 
 fast_periods = [10, 20, 50]
 slow_periods = [100, 150, 200]
@@ -862,59 +1169,112 @@ for fast, slow in itertools.product(fast_periods, slow_periods):
     if fast >= slow:
         continue
 
-    strategy = qc.SMACrossover(fast_period=fast, slow_period=slow)
-    engine   = qc.BacktestEngine(100_000.0)
+    engine = qc.BacktestEngine(100_000.0)
     engine.add_data('AAPL', bars)
-    engine.set_strategy(strategy)
+    engine.set_strategy(qc.SMACrossover(fast_period=fast, slow_period=slow))
     engine.run()
 
     equity  = np.array(engine.get_equity_curve())
     returns = calculate_returns(equity)
-    sharpe  = calculate_sharpe_ratio(returns)
-
-    results_grid[(fast, slow)] = sharpe
-    print(f"SMA({fast}/{slow}): Sharpe={sharpe:.2f}")
+    results_grid[(fast, slow)] = calculate_sharpe_ratio(returns)
 
 best = max(results_grid, key=results_grid.get)
-print(f"\nBest parameters: SMA({best[0]}/{best[1]}) Sharpe={results_grid[best]:.2f}")
+print(f"Best: SMA({best[0]}/{best[1]}) Sharpe={results_grid[best]:.2f}")
+```
+
+The engine is reentrant — `run()` resets all internal state before each run, so the same engine instance can be reused across multiple calls and will always produce identical results:
+
+```python
+engine = qc.BacktestEngine(100_000.0)
+engine.add_data('AAPL', bars)
+engine.set_strategy(qc.SMACrossover(20, 50))
+
+fv1 = engine.run()
+fv2 = engine.run()  # identical to fv1
 ```
 
 ### Parallel sweep with multiprocessing
-
-Each engine is independent with no shared state, so a parameter sweep is embarrassingly parallel:
 
 ```python
 from multiprocessing import Pool
 
 def run_single(params):
     fast, slow = params
-    bars     = qc.load_csv_data('data/aapl.csv', 'AAPL')
-    strategy = qc.SMACrossover(fast_period=fast, slow_period=slow)
-    engine   = qc.BacktestEngine(100_000.0)
+    bars   = qc.load_csv_data('data/aapl.csv', 'AAPL')
+    engine = qc.BacktestEngine(100_000.0)
     engine.add_data('AAPL', bars)
-    engine.set_strategy(strategy)
+    engine.set_strategy(qc.SMACrossover(fast_period=fast, slow_period=slow))
     engine.run()
-
     equity  = np.array(engine.get_equity_curve())
     returns = calculate_returns(equity)
     return (fast, slow, calculate_sharpe_ratio(returns))
 
-param_grid = [
-    (f, s) for f in [10, 20, 50]
-    for s in [100, 150, 200]
-    if f < s
-]
-
-with Pool() as pool:
-    results = pool.map(run_single, param_grid)
-
-for fast, slow, sharpe in sorted(results, key=lambda x: -x[2]):
-    print(f"SMA({fast}/{slow}): {sharpe:.2f}")
+if __name__ == '__main__':    # required on Windows
+    param_grid = [(f, s) for f in [10, 20, 50] for s in [100, 150, 200] if f < s]
+    with Pool() as pool:
+        results = pool.map(run_single, param_grid)
+    for fast, slow, sharpe in sorted(results, key=lambda x: -x[2]):
+        print(f"SMA({fast}/{slow}): {sharpe:.2f}")
 ```
 
-### Walk-forward analysis
+---
 
-A basic walk-forward setup: optimize in-sample, evaluate out-of-sample, roll forward:
+## 13. Walk-Forward Analysis
+
+Walk-forward analysis validates a strategy by repeatedly optimizing on an in-sample window and evaluating the best parameters on the following out-of-sample window. This guards against overfitting to a single historical period.
+
+> **Note:** `WalkForwardAnalyzer` currently supports single-asset data only. If you pass a multi-symbol dict, only the first symbol is used and the rest are silently ignored.
+
+### WalkForwardAnalyzer
+
+```python
+from quantcore.walk_forward import WalkForwardAnalyzer
+
+bars = qc.load_csv_data('data/aapl.csv', 'AAPL')
+data = {'AAPL': bars}  # single symbol only
+
+param_grid = {
+    'fast_period': [10, 20, 50],
+    'slow_period': [50, 100, 200],
+}
+
+wfa = WalkForwardAnalyzer(
+    strategy_factory=qc.SMACrossover,
+    param_grid=param_grid,
+    train_size=252,          # bars in each in-sample window
+    test_size=63,            # bars in each out-of-sample window (also the step size)
+    metric='sharpe_ratio',
+    n_jobs=1,
+)
+
+result = wfa.analyze(data, initial_capital=100_000.0, verbose=True)
+print(result.summary())
+```
+
+**`WalkForwardResult` fields:**
+
+```python
+result.in_sample_results        # List[OptimizationResult], best IS result per window
+result.out_of_sample_results    # List[dict], OOS metrics per window
+result.best_params_per_window   # List[dict], winning params per window
+result.combined_equity_curve    # np.ndarray, chained OOS equity curve across all windows
+result.overall_metrics          # dict: sharpe_ratio, total_return, max_drawdown, num_windows
+```
+
+OOS metrics in `out_of_sample_results` use **decimal format** for `total_return` and `max_drawdown`, consistent with `OptimizationResult`.
+
+The combined equity curve is continuous: each OOS segment is rescaled to begin from the end value of the previous segment, giving a smooth compounded curve across all windows.
+
+### Plotting parameter stability
+
+```python
+fig = wfa.plot_stability(result)
+fig.show()
+```
+
+This produces one subplot per parameter showing how the optimal value shifts across windows. Stable parameters are a sign of a robust strategy; highly variable ones may indicate overfitting.
+
+### Manual walk-forward
 
 ```python
 import numpy as np
@@ -922,8 +1282,8 @@ from quantcore.analytics import calculate_sharpe_ratio, calculate_returns
 
 all_bars   = qc.load_csv_data('data/aapl.csv', 'AAPL')
 n_bars     = len(all_bars)
-is_window  = 252   # 1 year in-sample
-oos_window = 63    # 1 quarter out-of-sample
+is_window  = 252
+oos_window = 63
 
 oos_sharpes = []
 
@@ -938,8 +1298,8 @@ for start in range(0, n_bars - is_window - oos_window, oos_window):
         engine.add_data('AAPL', is_bars)
         engine.set_strategy(qc.SMACrossover(fast, slow))
         engine.run()
-        eq  = np.array(engine.get_equity_curve())
-        sr  = calculate_sharpe_ratio(calculate_returns(eq))
+        eq = np.array(engine.get_equity_curve())
+        sr = calculate_sharpe_ratio(calculate_returns(eq))
         if sr > best_sharpe:
             best_sharpe, best_params = sr, (fast, slow)
 
@@ -948,7 +1308,7 @@ for start in range(0, n_bars - is_window - oos_window, oos_window):
     engine.add_data('AAPL', oos_bars)
     engine.set_strategy(qc.SMACrossover(*best_params))
     engine.run()
-    eq  = np.array(engine.get_equity_curve())
+    eq     = np.array(engine.get_equity_curve())
     oos_sr = calculate_sharpe_ratio(calculate_returns(eq))
     oos_sharpes.append(oos_sr)
 
@@ -957,3 +1317,40 @@ for start in range(0, n_bars - is_window - oos_window, oos_window):
 
 print(f"\nMean OOS Sharpe: {np.mean(oos_sharpes):.2f}")
 ```
+
+---
+
+## 14. Monte Carlo Validation
+
+`monte_carlo_validation` stress-tests a strategy by running it on many resampled versions of the price series and returning the distribution of outcomes. This measures how sensitive the strategy's performance is to the specific sequence of returns in the historical data.
+
+> **Note:** `monte_carlo_validation` currently supports single-asset data only. If you pass a multi-symbol dict, only the first symbol is used.
+
+```python
+from quantcore.walk_forward import monte_carlo_validation
+
+bars = qc.load_csv_data('data/aapl.csv', 'AAPL')
+data = {'AAPL': bars}
+
+mc_results = monte_carlo_validation(
+    strategy_factory=qc.SMACrossover,
+    params={'fast_period': 20, 'slow_period': 100},
+    data=data,
+    n_simulations=1000,
+    initial_capital=100_000.0,
+    method='bootstrap',   # 'bootstrap' (resample bars with replacement) or 'shuffle' (randomly reorder bars)
+    n_jobs=1,
+)
+
+import numpy as np
+sharpes   = mc_results['sharpe_ratios']  # np.ndarray
+returns   = mc_results['returns']        # np.ndarray, DECIMAL format (0.105 = 10.5%)
+drawdowns = mc_results['drawdowns']      # np.ndarray, DECIMAL format (-0.05 = -5%)
+
+print(f"Median Sharpe:   {np.median(sharpes):.2f}")
+print(f"5th pct Sharpe:  {np.percentile(sharpes, 5):.2f}")
+print(f"Median Return:   {np.median(returns):.2%}")
+print(f"Worst Drawdown:  {np.min(drawdowns):.2%}")
+```
+
+`strategy_factory` must be picklable when `n_jobs != 1`. The same rules apply as for `GridSearchOptimizer`: pass a class or module-level function, not a lambda, and guard with `if __name__ == '__main__':` on Windows.

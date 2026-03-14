@@ -186,8 +186,15 @@ PYBIND11_MODULE(_core, m) {
         .def("get_unrealized_pnl", &ExecutionEngine::get_unrealized_pnl)
         .def("get_total_pnl",      &ExecutionEngine::get_total_pnl)
         .def("get_total_fees",     &ExecutionEngine::get_total_fees)
-        .def("get_best_bid",       &ExecutionEngine::get_best_bid)
-        .def("get_best_ask",       &ExecutionEngine::get_best_ask)
+        // get_best_bid and get_best_ask return Price (int32_t cents) in C++.
+        // Divide by 100.0 here so Python callers receive consistent float dollars,
+        // matching every other price value in the API.
+        .def("get_best_bid", [](const ExecutionEngine& self) -> double {
+            return self.get_best_bid() / 100.0;
+        })
+        .def("get_best_ask", [](const ExecutionEngine& self) -> double {
+            return self.get_best_ask() / 100.0;
+        })
         .def("get_mid_price",      &ExecutionEngine::get_mid_price)
         .def("get_closed_trade_pnls",   &ExecutionEngine::get_closed_trade_pnls)
         .def("reset",              &ExecutionEngine::reset);
@@ -210,7 +217,17 @@ PYBIND11_MODULE(_core, m) {
         .def("set_position",     &Strategy::set_position,
              py::arg("symbol"), py::arg("quantity"))
         .def("get_position",     &Strategy::get_position,   py::arg("symbol"))
-        .def("has_position",     &Strategy::has_position,   py::arg("symbol"));
+        .def("has_position",     &Strategy::has_position,   py::arg("symbol"))
+        // get_portfolio() returns a raw pointer owned by BacktestEngine.
+        // The pointer is null until the engine attaches it at run(), so we
+        // must return py::none() explicitly — pybind11 does not convert a
+        // null raw pointer to None automatically and would raise or segfault.
+        .def("get_portfolio",
+             [](Strategy& self) -> py::object {
+                 PortfolioContext* p = self.get_portfolio();
+                 if (!p) return py::none();
+                 return py::cast(p, py::return_value_policy::reference);
+             });
 
     // ============================================================================
     // BUILT-IN STRATEGIES
@@ -384,10 +401,11 @@ PYBIND11_MODULE(_core, m) {
         // here or Python callers with 2 args get a "too few arguments" error.
         .def("set_position", &RiskManager::set_position,
              py::arg("symbol"), py::arg("quantity"), py::arg("price") = 0.0)
-        .def("get_position", &RiskManager::get_position)
+        .def("get_position", &RiskManager::get_position,  py::arg("symbol"))
         .def("set_limits",   &RiskManager::set_limits)
         .def("get_limits",   &RiskManager::get_limits)
-        .def("check_order",  &RiskManager::check_order)
+        .def("check_order",  &RiskManager::check_order,
+             py::arg("symbol"), py::arg("side"), py::arg("quantity"), py::arg("price"))
         .def("update_position",       &RiskManager::update_position)
         .def("reset",                 &RiskManager::reset)
         .def("get_all_positions",     &RiskManager::get_all_positions)
