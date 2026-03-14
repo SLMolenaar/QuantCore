@@ -21,6 +21,7 @@
 #include <deque>
 #include <numeric>
 #include <cmath>
+#include <algorithm>
 #include <iostream>
 
 namespace quantcore {
@@ -58,6 +59,12 @@ public:
     void add_data(const std::string& symbol, const BarSeries& bars) {
         if (bars.empty())
             throw std::invalid_argument("Cannot add empty bar series");
+        // Record insertion order on first add; ignore duplicate add_data calls
+        // for the same symbol (e.g. re-running with updated data).
+        if (data_.find(symbol) == data_.end()) {
+            symbol_order_index_[symbol] = symbol_order_.size();
+            symbol_order_.push_back(symbol);
+        }
         data_[symbol]          = bars;
         engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
         mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
@@ -248,6 +255,11 @@ private:
     std::unordered_map<std::string, std::shared_ptr<MarketMaker>>      mms_;
     std::unordered_map<std::string, double>                            last_px_;
     std::unordered_map<std::string, std::deque<double>>                price_history_;
+    // Insertion-order record of symbols for deterministic signal processing.
+    // symbol_order_ preserves add_data call order; symbol_order_index_ gives
+    // O(1) lookup of each symbol's position so the per-bar sort is fast.
+    std::vector<std::string>              symbol_order_;
+    std::unordered_map<std::string, size_t> symbol_order_index_;
 
     double   init_cap_;
     double   curr_cap_;
@@ -398,7 +410,22 @@ private:
         }
 
         strat_->on_data(*md);
-        for (const auto& sig : strat_->get_signals()) eq_.push(sig);
+
+        // Sort signals by insertion order (the order add_data was called) so
+        // that same-timestamp signals are always processed in a deterministic,
+        // user-controlled sequence. symbol_order_index_ gives O(1) position
+        // lookup so the sort is O(k log k) on the small signals vector.
+        auto signals = strat_->get_signals();
+        std::sort(signals.begin(), signals.end(),
+            [this](const std::shared_ptr<SignalEvent>& a,
+                   const std::shared_ptr<SignalEvent>& b) {
+                auto ia = symbol_order_index_.find(a->get_symbol());
+                auto ib = symbol_order_index_.find(b->get_symbol());
+                size_t idx_a = ia != symbol_order_index_.end() ? ia->second : symbol_order_.size();
+                size_t idx_b = ib != symbol_order_index_.end() ? ib->second : symbol_order_.size();
+                return idx_a < idx_b;
+            });
+        for (const auto& sig : signals) eq_.push(sig);
     }
 
     void handle_sig(EventPtr event) {
@@ -443,13 +470,27 @@ private:
         double available_cash = std::max(0.0, portfolio_->get_cash() - intrabar_cash_reserved_);
 
         if (sig->get_signal_type() == SignalType::BUY) {
-            PositionSizingContext ctx(strength, available_cash, curr_px, curr_pos,
-                                      portfolio_vol, default_stop_distance_);
-            target_pos = sizer_->calculate_size(ctx);
+            if (curr_pos < 0.0) {
+                // Closing a short position: target is flat (0), not a new long.
+                // The delta will be -curr_pos, submitting an exact exit order.
+                target_pos = 0.0;
+            } else {
+                // Flat or already long — open or add to a long position.
+                PositionSizingContext ctx(strength, available_cash, curr_px, curr_pos,
+                                          portfolio_vol, default_stop_distance_);
+                target_pos = sizer_->calculate_size(ctx);
+            }
         } else if (sig->get_signal_type() == SignalType::SELL) {
-            PositionSizingContext ctx(strength, available_cash, curr_px, curr_pos,
-                                      portfolio_vol, default_stop_distance_);
-            target_pos = -sizer_->calculate_size(ctx);
+            if (curr_pos > 0.0) {
+                // Closing a long position: target is flat (0), not a new short.
+                // The delta will be -curr_pos, submitting an exact exit order.
+                target_pos = 0.0;
+            } else {
+                // Flat or already short — open or add to a short position.
+                PositionSizingContext ctx(strength, available_cash, curr_px, curr_pos,
+                                          portfolio_vol, default_stop_distance_);
+                target_pos = -sizer_->calculate_size(ctx);
+            }
         } else {
             return;
         }
