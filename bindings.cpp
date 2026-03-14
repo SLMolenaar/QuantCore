@@ -444,7 +444,7 @@ PYBIND11_MODULE(_core, m) {
     // ============================================================================
 
     m.def("hello",   []() { return "Hello from QuantCore C++!"; });
-    m.def("version", []() { return "0.1.8.5"; });
+    m.def("version", []() { return "0.1.8.6"; });
 
-    m.attr("__version__") = "0.1.8.5";
+    m.attr("__version__") = "0.1.8.6";
 }

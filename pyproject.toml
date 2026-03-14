@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "quantcore"
-version = "0.1.8.5"
+version = "0.1.8.6"
 description = "High-performance C++20 backtesting engine with Python interface"
 readme = "README.md"
 license = { file = "LICENSE" }

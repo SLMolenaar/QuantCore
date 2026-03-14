@@ -15,7 +15,7 @@ class TestBasicImports:
     def test_version(self):
         version = qc.version()
         assert isinstance(version, str)
-        assert version == "0.1.0"
+        assert version == "0.1.8.6"
 
     def test_hello(self):
         assert "QuantCore" in qc.hello()
@@ -181,17 +181,19 @@ class TestHelperFunctions:
             initial_capital=100000.0
         )
 
-        assert 'initial_capital' in results
-        assert 'final_value'     in results
-        assert 'total_pnl'       in results
-        assert 'total_fees'      in results
-        assert 'return_pct'      in results
-        assert 'strategy'        in results
-        assert 'trade_pnls'      in results
+        assert isinstance(results, qc.BacktestResults)
 
-        assert results['strategy']        == 'BuyAndHold'
-        assert results['initial_capital'] == 100000.0
-        assert isinstance(results['trade_pnls'], list)
+        assert hasattr(results, 'initial_capital')
+        assert hasattr(results, 'final_value')
+        assert hasattr(results, 'total_pnl')
+        assert hasattr(results, 'total_fees')
+        assert hasattr(results, 'return_pct')
+        assert hasattr(results, 'strategy_name')
+        assert hasattr(results, 'trade_pnls')
+
+        assert results.strategy_name   == 'BuyAndHold'
+        assert results.initial_capital == 100000.0
+        assert isinstance(results.trade_pnls, list)
 
 
 if __name__ == "__main__":
