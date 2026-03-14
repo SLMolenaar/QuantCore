@@ -113,6 +113,8 @@ public:
         curr_cap_ = init_cap_;
         next_oid_ = 1;
         halted_   = false;
+        intrabar_cash_reserved_ = 0.0;
+        intrabar_timestamp_     = -1;
         strat_->reset();
         risk_mgr_->reset();
         risk_mgr_->set_capital(init_cap_, init_cap_);
@@ -154,13 +156,28 @@ public:
 
             if (event->get_type() == EventType::MARKET_DATA) {
                 update_portfolio();
-                double port_val = calc_portfolio_val();
-                equity_.push_back(port_val);
-                timestamps_.push_back(event->get_timestamp());
-                risk_mgr_->set_capital(init_cap_, port_val);
 
-                if (should_halt())
-                    flatten_all_positions(event->get_timestamp());
+                // Only record equity once per bar timestamp. With multiple symbols,
+                // there are N MARKET_DATA events per bar (one per symbol). Recording
+                // after each one produces N intermediate states per bar where only
+                // some symbols have updated prices — this gives wildly wrong values
+                // including apparent negative equity. Only snapshot after ALL symbols
+                // for this timestamp have been processed, i.e. when the next event
+                // has a different (or no) timestamp.
+                bool is_last_event_for_bar = eq_.empty() ||
+                    eq_.peek()->get_timestamp() != event->get_timestamp();
+
+                if (is_last_event_for_bar) {
+                    // Use curr_cap_ (computed from last_px_ in update_portfolio)
+                    // rather than calc_portfolio_val() which uses orderbook mid prices.
+                    // last_px_ is always the authoritative close price for each symbol.
+                    equity_.push_back(curr_cap_);
+                    timestamps_.push_back(event->get_timestamp());
+                    risk_mgr_->set_capital(init_cap_, curr_cap_);
+
+                    if (should_halt())
+                        flatten_all_positions(event->get_timestamp());
+                }
             }
         }
 
@@ -239,6 +256,11 @@ private:
     // Minimum meaningful order size — rejects floating point noise but
     // allows fractional shares down to 0.00000001.
     static constexpr double  MIN_ORDER_QTY        = 1e-8;
+
+    // Tracks notional reserved by buy signals already processed within the
+    // current bar. Reset to zero when the bar timestamp changes.
+    double  intrabar_cash_reserved_ = 0.0;
+    int64_t intrabar_timestamp_     = -1;
 
     template<typename T, typename... Args>
     std::shared_ptr<T> make_event(Args&&... args) {
@@ -387,12 +409,25 @@ private:
 
         double target_pos = 0.0;
 
+        // Reset intrabar reservation when we move to a new bar timestamp.
+        // Signals for the same bar share a timestamp; signals on the next bar
+        // get a fresh reservation budget.
+        if (sig->get_timestamp() != intrabar_timestamp_) {
+            intrabar_cash_reserved_ = 0.0;
+            intrabar_timestamp_     = sig->get_timestamp();
+        }
+
+        // Available cash = portfolio cash minus what has already been reserved
+        // by earlier signals processed within this same bar. This prevents
+        // over-allocation when many symbols signal simultaneously on one bar.
+        double available_cash = std::max(0.0, portfolio_->get_cash() - intrabar_cash_reserved_);
+
         if (sig->get_signal_type() == SignalType::BUY) {
-            PositionSizingContext ctx(strength, curr_cap_, curr_px, curr_pos,
+            PositionSizingContext ctx(strength, available_cash, curr_px, curr_pos,
                                       portfolio_vol, default_stop_distance_);
             target_pos = sizer_->calculate_size(ctx);
         } else if (sig->get_signal_type() == SignalType::SELL) {
-            PositionSizingContext ctx(strength, curr_cap_, curr_px, curr_pos,
+            PositionSizingContext ctx(strength, available_cash, curr_px, curr_pos,
                                       portfolio_vol, default_stop_distance_);
             target_pos = -sizer_->calculate_size(ctx);
         } else {
@@ -405,6 +440,12 @@ private:
 
         Side   ord_side = (delta > 0.0) ? Side::Buy : Side::Sell;
         double ord_qty  = std::abs(delta);
+
+        // Reserve the notional cost of this buy so subsequent signals on the
+        // same bar see reduced available cash and don't over-allocate.
+        if (ord_side == Side::Buy) {
+            intrabar_cash_reserved_ += ord_qty * curr_px;
+        }
 
         double spread = mm_spread_;
         auto   mm_it  = mms_.find(sig->get_symbol());
