@@ -544,12 +544,21 @@ All fields return zero (or `None` for `get_mid_price()`) before `run()` is calle
 
 Position sizers control how many shares are ordered when a signal is generated. All sizers respect constraints set via `set_max_position_size`, `set_min_position_size`, and `set_max_leverage`.
 
+### Default leverage behaviour
+
+Each sizer has an internal `max_leverage_` cap that limits the notional value of any single order to `capital * max_leverage_`. The default differs by sizer:
+
+- `FixedPercentage`, `VolatilityTargeting`, `FixedShares`: cap is **disabled by default** (`max_leverage_ = 0`). The engine's `RiskLimits` act as the sole ceiling. Call `set_max_leverage()` to impose an additional sizer-level cap.
+- `RiskBased`, `KellyCriterion`, `EqualWeight`: cap defaults to **1x**. Call `set_max_leverage()` to allow leverage above 1x.
+
 ### FixedPercentage
 
-Allocates a fixed fraction of current capital per position.
+Allocates a fixed fraction of current capital per position. Values above `1.0` imply leverage (e.g. `2.0` = 200% of capital per position) and are valid — the sizer does not cap leverage internally, so `RiskLimits.max_leverage` on the engine acts as the ceiling.
 
 ```python
-sizer = qc.FixedPercentage(0.10)  # 10% per trade
+sizer = qc.FixedPercentage(0.10)   # 10% per trade, no leverage
+sizer = qc.FixedPercentage(1.0)    # 100% per trade (1x, single asset)
+sizer = qc.FixedPercentage(2.0)    # 200% per trade — requires matching RiskLimits
 ```
 
 ### RiskBased
@@ -576,10 +585,14 @@ Sizes using the Kelly formula: `f* = (win_rate * avg_win - (1 - win_rate) * avg_
 sizer = qc.KellyCriterion(win_rate=0.55, avg_win=0.02, avg_loss=0.01)
 ```
 
-Kelly sizing can produce large positions. Use `set_max_leverage` to cap it:
+Kelly sizing can produce large positions. The sizer defaults to a 1x leverage cap — call `set_max_leverage` to allow leverage above 1x, or use a fractional Kelly to reduce size:
 
 ```python
-sizer.set_max_leverage(1.0)  # No leverage
+# Allow up to 2x leverage
+sizer.set_max_leverage(2.0)
+
+# Or use fractional Kelly to reduce size at 1x
+sizer = qc.KellyCriterion(win_rate=0.55, avg_win=0.02, avg_loss=0.01, fraction=0.25)
 ```
 
 ### EqualWeight
@@ -592,17 +605,20 @@ sizer = qc.EqualWeight(num_positions=5)  # 20% per position
 
 ### VolatilityTargeting
 
-Scales leverage to hit a target annualized portfolio volatility.
+Scales leverage to hit a target annualized portfolio volatility. The sizer is uncapped by default — it will scale above 1x if the portfolio volatility is low relative to the target. Use `set_max_leverage()` to impose a ceiling, or rely on `RiskLimits.max_leverage` on the engine.
 
 ```python
 sizer = qc.VolatilityTargeting(target_volatility=0.15)  # Target 15% annualized vol
+
+# Cap leverage at 2x
+sizer.set_max_leverage(2.0)
 ```
 
 The engine provides a running volatility estimate after sufficient history is available; the sizer returns zero until then. Set `bars_per_year` on the engine to ensure correct annualization (see [Bars per year](#bars-per-year)).
 
 ### FixedShares
 
-Always orders the same number of shares regardless of capital or price.
+Always orders the same number of shares regardless of capital or price. Uncapped by default.
 
 ```python
 sizer = qc.FixedShares(100)  # Always order 100 shares
@@ -615,7 +631,7 @@ All sizers support the same constraint API:
 ```python
 sizer.set_max_position_size(500)   # Max 500 shares per position
 sizer.set_min_position_size(10)    # Orders below this size are dropped entirely
-sizer.set_max_leverage(2.0)        # Notional cannot exceed 2x capital
+sizer.set_max_leverage(2.0)        # Notional cannot exceed 2x capital (0 = disabled)
 ```
 
 ### Retrieving the active sizer
@@ -704,8 +720,10 @@ if result:
 limits = qc.RiskLimits()
 
 limits.enabled            = True   # Set False to disable all checks
-limits.max_position_pct   = 0.20   # Max position value / capital (per symbol)
-limits.max_leverage       = 2.0    # Max total notional / capital
+limits.max_position_pct   = 0.20   # Max position notional / capital (per symbol).
+                                   # Values above 1.0 allow leverage on a single asset,
+                                   # e.g. 2.0 means one asset can be sized up to 2x capital.
+limits.max_leverage       = 2.0    # Max total notional / capital across all positions
 limits.max_loss_pct       = 0.50   # Halt if drawdown from initial capital exceeds this
 limits.max_order_value    = 50_000 # Max notional per single order (0 = no limit)
 ```
