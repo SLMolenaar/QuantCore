@@ -84,7 +84,9 @@ TEST_F(PositionSizerTest, FixedPercentageInvalidPctNegative) {
 }
 
 TEST_F(PositionSizerTest, FixedPercentageInvalidPctOverOne) {
-    EXPECT_THROW(FixedPercentage(1.5), std::invalid_argument);
+    EXPECT_NO_THROW(FixedPercentage(1.5));
+    EXPECT_THROW(FixedPercentage(0.0), std::invalid_argument);
+    EXPECT_THROW(FixedPercentage(-0.1), std::invalid_argument);
 }
 
 TEST_F(PositionSizerTest, FixedPercentageGetName) {
@@ -346,9 +348,9 @@ TEST_F(PositionSizerTest, VolatilityTargetingLowVol) {
 
     double size = sizer.calculate_size(ctx);
 
-    // Leverage: 0.15 / 0.05 = 3.0 (but capped at max_leverage_ default 1.0)
-    // So size = 1000 shares
-    EXPECT_DOUBLE_EQ(size, 1000.0);
+    // Leverage: 0.15 / 0.05 = 3.0
+    // So size = 3000 shares
+    EXPECT_DOUBLE_EQ(size, 3000.0);
 }
 
 TEST_F(PositionSizerTest, VolatilityTargetingHighVol) {
@@ -384,8 +386,8 @@ TEST_F(PositionSizerTest, VolatilityTargetingZeroVol) {
 
 TEST_F(PositionSizerTest, VolatilityTargetingInvalidTarget) {
     EXPECT_THROW(VolatilityTargeting(0.0), std::invalid_argument);
-    EXPECT_THROW(VolatilityTargeting(1.5), std::invalid_argument);
     EXPECT_THROW(VolatilityTargeting(-0.1), std::invalid_argument);
+    EXPECT_NO_THROW(VolatilityTargeting(1.5));  // valid, implies leverage
 }
 
 // ============================================================================
