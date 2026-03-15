@@ -62,13 +62,17 @@ protected:
         // 0.0 in their constructor.
         if (max_leverage_ > 0) {
             double max_notional = ctx.current_capital * max_leverage_;
-            double max_shares   = max_notional / ctx.current_price;
+            // Floor max_shares so the resulting notional never exceeds the
+            // intended limit due to floating-point rounding.
+            double max_shares   = std::floor(max_notional / ctx.current_price);
             if (std::abs(size) > max_shares) {
                 size = std::copysign(max_shares, size);
             }
         }
 
-        return size;
+        // Always return a whole number of shares. Fractional shares are not
+        // supported and would cause the notional to drift above intended limits.
+        return std::floor(std::abs(size)) * (size >= 0.0 ? 1.0 : -1.0);
     }
 
     double max_position_size_ = 0.0;
@@ -93,7 +97,16 @@ public:
     }
 
     double calculate_size(const PositionSizingContext& ctx) override {
-        double shares = (ctx.current_capital * pct_ / ctx.current_price) * ctx.signal_strength;
+        // Floor to whole shares first so notional is always <= capital * pct_.
+        double shares = std::floor(ctx.current_capital * pct_ * ctx.signal_strength
+                                   / ctx.current_price);
+
+        // Belt-and-suspenders: if floating-point arithmetic still produces a
+        // notional fractionally above the limit, subtract one share.
+        while (shares > 0.0 && shares * ctx.current_price > ctx.current_capital * pct_) {
+            shares -= 1.0;
+        }
+
         return apply_constraints(shares, ctx);
     }
 

@@ -52,15 +52,6 @@ struct RiskLimits {
     }
 };
 
-// Tolerance for floating-point comparisons in check_order(). Guards against
-// spurious rejections when a position sizer produces e.g. 1.0000000001 instead
-// of exactly 1.0 due to intermediate rounding.
-// Applied to position and leverage checks only. The loss-limit check is
-// intentionally exact: it is a hard drawdown stop, not a sizing constraint,
-// and a tiny epsilon there would allow losses slightly beyond the configured
-// threshold, which is unsafe.
-static constexpr double RISK_CHECK_EPSILON = 1e-9;
-
 class RiskManager {
 public:
     explicit RiskManager(const RiskLimits& limits = RiskLimits())
@@ -158,37 +149,47 @@ public:
             );
         }
 
-        double current_qty  = get_position(symbol);
-        double new_qty      = (side == Side::Buy)
-                                ? current_qty + quantity
-                                : current_qty - quantity;
-        double new_notional = std::abs(new_qty) * price;
-        double position_pct = new_notional / current_capital_;
+        double current_qty      = get_position(symbol);
+        double new_qty          = (side == Side::Buy)
+                                    ? current_qty + quantity
+                                    : current_qty - quantity;
+        double current_notional = std::abs(current_qty) * price;
+        double new_notional     = std::abs(new_qty) * price;
 
-        if (position_pct > limits_.max_position_pct + RISK_CHECK_EPSILON) {
-            return RiskCheckResponse::reject(
-                RiskCheckResult::REJECTED_POSITION_LIMIT,
-                "Position would be " + std::to_string(position_pct * 100.0) +
-                "% of capital, max is " + std::to_string(limits_.max_position_pct * 100.0) + "%"
-            );
+        // Only apply the position limit check when the order increases notional
+        // exposure. Reduces and closes always decrease risk and must never be
+        // blocked by a sizing limit — doing so would trap the strategy in a
+        // position it cannot exit.
+        if (new_notional > current_notional) {
+            double position_pct = new_notional / current_capital_;
+            if (position_pct > limits_.max_position_pct) {
+                return RiskCheckResponse::reject(
+                    RiskCheckResult::REJECTED_POSITION_LIMIT,
+                    "Position would be " + std::to_string(position_pct * 100.0) +
+                    "% of capital, max is " + std::to_string(limits_.max_position_pct * 100.0) + "%"
+                );
+            }
         }
 
         // Leverage is total portfolio notional exposure / capital.
         // We compute it using the last-known notional for each symbol so that
         // positions in different instruments are compared on equal footing.
+        // Only check when the order increases total exposure.
         double total_exposure = calculate_total_exposure(symbol, new_notional);
-        double leverage       = total_exposure / current_capital_;
-
-        if (leverage > limits_.max_leverage + RISK_CHECK_EPSILON) {
-            return RiskCheckResponse::reject(
-                RiskCheckResult::REJECTED_LEVERAGE_LIMIT,
-                "Leverage would be " + std::to_string(leverage) +
-                "x, max is " + std::to_string(limits_.max_leverage) + "x"
-            );
+        if (new_notional > current_notional) {
+            double leverage = total_exposure / current_capital_;
+            if (leverage > limits_.max_leverage) {
+                return RiskCheckResponse::reject(
+                    RiskCheckResult::REJECTED_LEVERAGE_LIMIT,
+                    "Leverage would be " + std::to_string(leverage) +
+                    "x, max is " + std::to_string(limits_.max_leverage) + "x"
+                );
+            }
         }
 
-        // The loss limit is a hard drawdown stop and is checked without epsilon:
-        // softening it would allow losses slightly beyond the configured threshold.
+        // The loss limit is a hard drawdown stop and is always checked regardless
+        // of order direction — we do not want to allow new entries when the
+        // portfolio is already past the configured loss threshold.
         double loss_pct = (initial_capital_ - current_capital_) / initial_capital_;
         if (loss_pct > limits_.max_loss_pct) {
             return RiskCheckResponse::reject(
