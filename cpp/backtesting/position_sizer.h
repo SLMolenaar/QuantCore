@@ -16,11 +16,11 @@ struct PositionSizingContext {
     double stop_loss_distance;
 
     PositionSizingContext(
-        double strength     = 1.0,
-        double capital      = 100000.0,
-        double price        = 100.0,
-        double position     = 0.0,
-        double volatility   = 0.02,
+        double strength      = 1.0,
+        double capital       = 100000.0,
+        double price         = 100.0,
+        double position      = 0.0,
+        double volatility    = 0.02,
         double stop_distance = 0.05
     )
         : signal_strength(strength)
@@ -57,6 +57,9 @@ protected:
             size = std::copysign(max_position_size_, size);
         }
 
+        // max_leverage_ == 0 means no cap (the sizer defers to RiskLimits on
+        // the engine). Derived classes that want an uncapped default set it to
+        // 0.0 in their constructor.
         if (max_leverage_ > 0) {
             double max_notional = ctx.current_capital * max_leverage_;
             double max_shares   = max_notional / ctx.current_price;
@@ -70,14 +73,23 @@ protected:
 
     double max_position_size_ = 0.0;
     double min_position_size_ = 0.0;
+    // Default cap of 1x leverage. Derived classes that support or require
+    // leverage above 1x should set this to 0.0 (disabled) in their constructor
+    // so the engine's RiskLimits remain the sole ceiling.
     double max_leverage_      = 1.0;
 };
 
 class FixedPercentage : public PositionSizer {
 public:
+    // pct is the fraction of capital to allocate per position.
+    // Values above 1.0 imply leverage (e.g. 2.0 = 200% of capital).
+    // The sizer's internal max_leverage_ cap is disabled by default so that
+    // pct > 1.0 is not silently clipped; the engine's RiskLimits act as the
+    // ceiling. Call set_max_leverage() to impose an additional sizer-level cap.
     explicit FixedPercentage(double pct = 0.1) : pct_(pct) {
-        if (pct <= 0.0 || pct > 1.0)
-            throw std::invalid_argument("Percentage must be between 0 and 1");
+        if (pct <= 0.0)
+            throw std::invalid_argument("Percentage must be positive");
+        max_leverage_ = 0.0;
     }
 
     double calculate_size(const PositionSizingContext& ctx) override {
@@ -172,14 +184,19 @@ private:
 
 class VolatilityTargeting : public PositionSizer {
 public:
+    // target_vol is the annualised portfolio volatility to target as a fraction
+    // (e.g. 0.15 = 15%). Values above 1.0 imply leverage; the sizer scales
+    // uncapped by default so that the engine's RiskLimits remain the sole ceiling.
+    // Call set_max_leverage() to impose an additional sizer-level cap.
     explicit VolatilityTargeting(double target_vol = 0.15) : target_vol_(target_vol) {
-        if (target_vol <= 0.0 || target_vol > 1.0)
-            throw std::invalid_argument("Target volatility must be between 0 and 1");
+        if (target_vol <= 0.0)
+            throw std::invalid_argument("Target volatility must be positive");
+        max_leverage_ = 0.0;
     }
 
     double calculate_size(const PositionSizingContext& ctx) override {
         if (ctx.portfolio_volatility <= 0.0) return 0.0;
-        double lev    = std::min(target_vol_ / ctx.portfolio_volatility, max_leverage_);
+        double lev    = target_vol_ / ctx.portfolio_volatility;
         double shares = (ctx.current_capital * lev / ctx.current_price)
                         * ctx.signal_strength;
         return apply_constraints(shares, ctx);

@@ -34,21 +34,32 @@ struct RiskCheckResponse {
 };
 
 struct RiskLimits {
-    double max_position_pct  = 0.20;   // max single-asset notional / capital
+    double max_position_pct  = 0.20;   // max single-asset notional / capital; values > 1.0 allow leverage
     double max_leverage      = 2.0;    // max total notional / capital
     double max_loss_pct      = 0.50;   // max drawdown from initial capital
     double max_order_value   = 0.0;    // 0 = disabled
     bool   enabled           = true;
 
     void validate() const {
-        if (max_position_pct <= 0.0 || max_position_pct > 1.0)
-            throw std::invalid_argument("max_position_pct must be between 0 and 1");
-        if (max_leverage <= 0.0 || max_leverage > 10.0)
-            throw std::invalid_argument("max_leverage must be between 0 and 10");
+        if (max_position_pct <= 0.0)
+            throw std::invalid_argument("max_position_pct must be positive");
+        // No upper bound: values > 1.0 allow per-asset leverage, which is
+        // valid when the user explicitly configures it.
+        if (max_leverage <= 0.0)
+            throw std::invalid_argument("max_leverage must be positive");
         if (max_loss_pct <= 0.0 || max_loss_pct > 1.0)
             throw std::invalid_argument("max_loss_pct must be between 0 and 1");
     }
 };
+
+// Tolerance for floating-point comparisons in check_order(). Guards against
+// spurious rejections when a position sizer produces e.g. 1.0000000001 instead
+// of exactly 1.0 due to intermediate rounding.
+// Applied to position and leverage checks only. The loss-limit check is
+// intentionally exact: it is a hard drawdown stop, not a sizing constraint,
+// and a tiny epsilon there would allow losses slightly beyond the configured
+// threshold, which is unsafe.
+static constexpr double RISK_CHECK_EPSILON = 1e-9;
 
 class RiskManager {
 public:
@@ -69,6 +80,12 @@ public:
     // Providing a price enables accurate notional-based leverage checks.
     // A price of 0 leaves the existing notional unchanged (use when only
     // correcting quantity after a partial fill).
+    //
+    // IMPORTANT: always provide a price when leverage above 1x is in use.
+    // Calling with price == 0 retains the previous notional, which will be
+    // stale after a price move and will cause incorrect leverage calculations
+    // in check_order(). Prefer set_position(sym, qty, price) over
+    // update_position(sym, side, qty) in any leveraged context.
     void set_position(const std::string& symbol, double quantity, double price = 0.0) {
         positions_[symbol] = quantity;
 
@@ -141,14 +158,14 @@ public:
             );
         }
 
-        double current_qty      = get_position(symbol);
-        double new_qty          = (side == Side::Buy)
-                                    ? current_qty + quantity
-                                    : current_qty - quantity;
-        double new_notional     = std::abs(new_qty) * price;
-        double position_pct     = new_notional / current_capital_;
+        double current_qty  = get_position(symbol);
+        double new_qty      = (side == Side::Buy)
+                                ? current_qty + quantity
+                                : current_qty - quantity;
+        double new_notional = std::abs(new_qty) * price;
+        double position_pct = new_notional / current_capital_;
 
-        if (position_pct > limits_.max_position_pct) {
+        if (position_pct > limits_.max_position_pct + RISK_CHECK_EPSILON) {
             return RiskCheckResponse::reject(
                 RiskCheckResult::REJECTED_POSITION_LIMIT,
                 "Position would be " + std::to_string(position_pct * 100.0) +
@@ -162,7 +179,7 @@ public:
         double total_exposure = calculate_total_exposure(symbol, new_notional);
         double leverage       = total_exposure / current_capital_;
 
-        if (leverage > limits_.max_leverage) {
+        if (leverage > limits_.max_leverage + RISK_CHECK_EPSILON) {
             return RiskCheckResponse::reject(
                 RiskCheckResult::REJECTED_LEVERAGE_LIMIT,
                 "Leverage would be " + std::to_string(leverage) +
@@ -170,6 +187,8 @@ public:
             );
         }
 
+        // The loss limit is a hard drawdown stop and is checked without epsilon:
+        // softening it would allow losses slightly beyond the configured threshold.
         double loss_pct = (initial_capital_ - current_capital_) / initial_capital_;
         if (loss_pct > limits_.max_loss_pct) {
             return RiskCheckResponse::reject(
@@ -182,13 +201,15 @@ public:
         return RiskCheckResponse::approve();
     }
 
+    // Updates position quantity only; does not update the stored notional.
+    // Prefer set_position(symbol, quantity, price) in any context where
+    // accurate leverage calculations matter, especially when leverage > 1x
+    // is in use and notional staleness could cause incorrect check_order() results.
     void update_position(const std::string& symbol, Side side, double quantity) {
         double current = get_position(symbol);
         positions_[symbol] = (side == Side::Buy)
             ? current + quantity
             : current - quantity;
-        // Notional is not updated here because we don't have a price; callers
-        // that need notional tracking should use set_position(sym, qty, price).
     }
 
     void reset() {
