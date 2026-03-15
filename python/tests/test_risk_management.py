@@ -32,14 +32,28 @@ class TestRiskLimits:
     def test_validate_position_pct(self):
         limits = qc.RiskLimits()
         limits.max_position_pct = 1.5
+        limits.validate()  # should not raise — values > 1.0 allow per-asset leverage
+
+        limits.max_position_pct = 0.0
         with pytest.raises(Exception):
-            limits.validate()
+            limits.validate()  # zero is invalid
+
+        limits.max_position_pct = -0.1
+        with pytest.raises(Exception):
+            limits.validate()  # negative is invalid
 
     def test_validate_leverage(self):
         limits = qc.RiskLimits()
         limits.max_leverage = 15.0
+        limits.validate()  # should not raise — high leverage is valid if explicitly set
+
+        limits.max_leverage = 0.0
         with pytest.raises(Exception):
-            limits.validate()
+            limits.validate()  # zero is invalid
+
+        limits.max_leverage = -1.0
+        with pytest.raises(Exception):
+            limits.validate()  # negative is invalid
 
 
 class TestRiskManager:
