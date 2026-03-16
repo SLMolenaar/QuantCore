@@ -338,7 +338,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Open areas if you want to dig in:
 *Throughput measured on SMA(50/200) crossover, 50K daily bars, Release build, Windows.
 Reproduce: `python benchmarks/benchmark_quantcore_vs_backtrader.py --bars 50000 --runs 20`*
 
-The engine doesn't handle corporate actions, survivorship bias, or timezone normalization. That's the data layer's job. Feed it clean adjusted data and none of those are problems.
+The engine doesn't handle corporate actions, survivorship bias, or timezone normalization. Feed it clean adjusted data and none of those are problems.
 
 ---
 
