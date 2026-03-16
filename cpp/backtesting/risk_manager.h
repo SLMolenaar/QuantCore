@@ -2,10 +2,6 @@
 
 #include <string>
 #include <map>
-#include <memory>
-#include <optional>
-#include "orderbook/Order.h"
-#include "orderbook/Types.h"
 
 namespace quantcore {
 
