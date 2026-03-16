@@ -186,7 +186,7 @@ def bench_backtrader(data: np.ndarray, n_runs: int) -> tuple[float, float]:
 
 def main():
     parser = argparse.ArgumentParser(description="QuantCore vs Backtrader benchmark")
-    parser.add_argument("--bars", type=int, default=50000,
+    parser.add_argument("--bars", type=int, default=25000,
                         help="Number of OHLCV bars to benchmark (default: 50000)")
     parser.add_argument("--runs", type=int, default=20,
                         help="Number of timed runs per engine (default: 3)")

@@ -310,15 +310,15 @@ quantcore/
 
 ## vs. Alternatives
 
-| | QuantCore | Backtrader | Zipline |
-|---|---|---|---|
-| Core language | C++20 | Python | Python |
-| Order book simulation | ✅ Real LOB | ❌ | ❌ |
-| Event-driven | ✅ | ✅ | ✅ |
-| Look-ahead prevention | ✅ Priority queue | ✅ | ✅ |
-| Python strategy API | ✅ pybind11 | ✅ native | ✅ native |
-| Throughput (bars/s) | ~260K | ~6.5K | unverified |
-| Maintenance | Active | Stale | Inactive |
+| | QuantCore        | Backtrader | Zipline |
+|---|------------------|------------|---|
+| Core language | C++20            | Python     | Python |
+| Order book simulation | ✅ Real LOB       | ❌          | ❌ |
+| Event-driven | ✅                | ✅          | ✅ |
+| Look-ahead prevention | ✅ Priority queue | ✅          | ✅ |
+| Python strategy API | ✅ pybind11       | ✅ native   | ✅ native |
+| Throughput (bars/s) | ~300K             | ~7.7K       | unverified |
+| Maintenance | Active           | Stale      | Inactive |
 
 The main differentiator is the order book. Backtrader and Zipline assume you fill at the bar's close price. QuantCore routes orders through a real price-time priority matching engine, which gives you realistic partial fills, spread simulation, and tick-level execution when you have tick data.
 
