@@ -319,6 +319,8 @@ quantcore/
 | Python strategy API | ✅ pybind11       | ✅ native   | ✅ native |
 | Throughput (bars/s) | ~300K             | ~7.7K       | unverified |
 | Maintenance | Active           | Stale      | Inactive |
+*Throughput measured on SMA(50/200) crossover, 50K daily bars, Release build, Windows.
+Reproduce: `python benchmarks/benchmark_quantcore_vs_backtrader.py --bars 50000 --runs 20`*
 
 The main differentiator is the order book. Backtrader and Zipline assume you fill at the bar's close price. QuantCore routes orders through a real price-time priority matching engine, which gives you realistic partial fills, spread simulation, and tick-level execution when you have tick data.
 
@@ -334,9 +336,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Open areas if you want to dig in:
 - **Trading calendar**: holiday/early-close filtering before bars hit the engine
 - **Multi-strategy portfolio**: shared capital across strategies with a meta-allocator
 - **Parallel sweeps on Linux**: `n_jobs` exists but Windows spawn overhead kills it; a Linux worker pool would make it actually useful
-
-*Throughput measured on SMA(50/200) crossover, 50K daily bars, Release build, Windows.
-Reproduce: `python benchmarks/benchmark_quantcore_vs_backtrader.py --bars 50000 --runs 20`*
 
 The engine doesn't handle corporate actions, survivorship bias, or timezone normalization. Feed it clean adjusted data and none of those are problems.
 
