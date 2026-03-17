@@ -30,7 +30,7 @@ struct RiskCheckResponse {
 };
 
 struct RiskLimits {
-    double max_position_pct  = 0.20;   // max single-asset notional / capital; values > 1.0 allow leverage
+    double max_position_pct  = 0.20;   // max single-asset notional / capital
     double max_leverage      = 2.0;    // max total notional / capital
     double max_loss_pct      = 0.50;   // max drawdown from initial capital
     double max_order_value   = 0.0;    // 0 = disabled
@@ -39,8 +39,6 @@ struct RiskLimits {
     void validate() const {
         if (max_position_pct <= 0.0)
             throw std::invalid_argument("max_position_pct must be positive");
-        // No upper bound: values > 1.0 allow per-asset leverage, which is
-        // valid when the user explicitly configures it.
         if (max_leverage <= 0.0)
             throw std::invalid_argument("max_leverage must be positive");
         if (max_loss_pct <= 0.0 || max_loss_pct > 1.0)
@@ -48,14 +46,8 @@ struct RiskLimits {
     }
 };
 
-    // Tolerance for floating-point comparisons in check_order(). Guards against
-    // spurious rejections when a position sizer produces a notional fractionally
-    // above the configured limit due to floating-point arithmetic on partial shares.
-    // The overage observed in practice is ~0.03% of capital (signal_strength
-    // scaling introduces a residual that compounds with price division), so 5e-4
-    // (0.05%) is sufficient to absorb it without meaningfully softening the risk
-    // check. The loss-limit check is intentionally exact.
-    static constexpr double RISK_CHECK_EPSILON = 5e-4;
+// Small tolerance for floating-point overshoot from position sizer calculations.
+static constexpr double RISK_CHECK_EPSILON = 5e-4;
 
 class RiskManager {
 public:
@@ -72,16 +64,6 @@ public:
         current_capital_ = current;
     }
 
-    // Update the tracked quantity and last-known price for a symbol.
-    // Providing a price enables accurate notional-based leverage checks.
-    // A price of 0 leaves the existing notional unchanged (use when only
-    // correcting quantity after a partial fill).
-    //
-    // IMPORTANT: always provide a price when leverage above 1x is in use.
-    // Calling with price == 0 retains the previous notional, which will be
-    // stale after a price move and will cause incorrect leverage calculations
-    // in check_order(). Prefer set_position(sym, qty, price) over
-    // update_position(sym, side, qty) in any leveraged context.
     void set_position(const std::string& symbol, double quantity, double price = 0.0) {
         positions_[symbol] = quantity;
 
@@ -92,8 +74,6 @@ public:
             position_notionals_[symbol] = std::abs(quantity) * price;
             last_prices_[symbol] = price;
         }
-        // If price == 0 and quantity != 0, the notional entry from the previous
-        // fill is retained — better than zeroing it out with no price information.
     }
 
     void update_price(const std::string& symbol, double price) {
@@ -161,10 +141,8 @@ public:
         double current_notional = std::abs(current_qty) * price;
         double new_notional     = std::abs(new_qty) * price;
 
-        // Only apply the position and leverage checks when the order increases
-        // notional exposure. Reduces and closes always decrease risk and must
-        // never be blocked by a sizing limit — doing so would trap the strategy
-        // in a position it cannot exit.
+        // Only check limits when the order increases notional exposure.
+        // Reduces and closes must never be blocked.
         if (new_notional > current_notional) {
             double position_pct = new_notional / current_capital_;
             if (position_pct > limits_.max_position_pct + RISK_CHECK_EPSILON) {
@@ -186,9 +164,6 @@ public:
             }
         }
 
-        // The loss limit is a hard drawdown stop and is checked regardless of
-        // order direction — we do not want to allow new entries when the
-        // portfolio is already past the configured loss threshold.
         double loss_pct = (initial_capital_ - current_capital_) / initial_capital_;
         if (loss_pct > limits_.max_loss_pct) {
             return RiskCheckResponse::reject(
@@ -201,10 +176,7 @@ public:
         return RiskCheckResponse::approve();
     }
 
-    // Updates position quantity only; does not update the stored notional.
-    // Prefer set_position(symbol, quantity, price) in any context where
-    // accurate leverage calculations matter, especially when leverage > 1x
-    // is in use and notional staleness could cause incorrect check_order() results.
+    // Updates position quantity only, does not update stored notional.
     void update_position(const std::string& symbol, Side side, double quantity) {
         double current = get_position(symbol);
         positions_[symbol] = (side == Side::Buy)
@@ -224,7 +196,6 @@ public:
 
     std::map<std::string, double> get_all_prices() const { return last_prices_; }
 
-    // Sum of absolute notional exposures across all positions.
     double calculate_total_exposure() const {
         double total = 0.0;
         for (const auto& [sym, notional] : position_notionals_) total += notional;
@@ -237,12 +208,9 @@ private:
     double     current_capital_;
 
     std::map<std::string, double> positions_;
-    // Last-known notional value (|qty| * price) per symbol, updated on each fill.
     std::map<std::string, double> position_notionals_;
     std::map<std::string, double> last_prices_;
 
-    // Returns total portfolio notional after hypothetically replacing `symbol`'s
-    // exposure with `new_notional`. Uses stored notionals for all other symbols.
     double calculate_total_exposure(
         const std::string& symbol_to_update,
         double new_notional

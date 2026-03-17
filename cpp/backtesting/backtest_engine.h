@@ -59,8 +59,6 @@ public:
     void add_data(const std::string& symbol, const BarSeries& bars) {
         if (bars.empty())
             throw std::invalid_argument("Cannot add empty bar series");
-        // Record insertion order on first add; ignore duplicate add_data calls
-        // for the same symbol (e.g. re-running with updated data).
         if (data_.find(symbol) == data_.end()) {
             symbol_order_index_[symbol] = symbol_order_.size();
             symbol_order_.push_back(symbol);
@@ -148,9 +146,6 @@ public:
 
         load_data();
 
-        // Record the initial state before any bars are processed.
-        // The equity curve will then have n_bars + 1 entries total:
-        // [initial_capital, after_bar_1, after_bar_2, ..., after_bar_n].
         equity_.push_back(init_cap_);
         timestamps_.push_back(first_bar_timestamp_);
 
@@ -167,26 +162,12 @@ public:
             if (event->get_type() == EventType::MARKET_DATA) {
                 update_portfolio();
 
-                // Only record equity once per bar timestamp. With multiple symbols,
-                // there are N MARKET_DATA events per bar (one per symbol). Recording
-                // after each one produces N intermediate states per bar where only
-                // some symbols have updated prices — this gives wildly wrong values
-                // including apparent negative equity. Only snapshot after ALL symbols
-                // for this timestamp have been processed, i.e. when the next event
-                // in the queue has a different timestamp (or the queue is empty, meaning
-                // this was the last market data event of the entire backtest).
-                //
-                // We compare against the next MARKET_DATA timestamp specifically,
-                // not just any event, so that pending SIGNAL/ORDER/FILL events with
-                // the same bar timestamp do not falsely trigger an early snapshot.
+                // Snapshot equity once per bar, after all symbols for this
+                // timestamp have been processed. Peeking at the next event:
+                // if it's a MARKET_DATA event with the same timestamp, more
+                // symbols are still pending for this bar.
                 bool is_last_md_for_bar = true;
                 if (!eq_.empty()) {
-                    // Peek ahead: find the next MARKET_DATA event's timestamp.
-                    // Since the queue is a min-heap ordered by (timestamp, event_type)
-                    // and MARKET_DATA has the lowest EventType value, the next
-                    // MARKET_DATA event will always be at or after the current front.
-                    // A simpler and correct check: if the very next event is a
-                    // MARKET_DATA event with the same timestamp, we are not done yet.
                     auto next = eq_.peek();
                     if (next->get_type() == EventType::MARKET_DATA &&
                         next->get_timestamp() == event->get_timestamp()) {
@@ -195,9 +176,6 @@ public:
                 }
 
                 if (is_last_md_for_bar) {
-                    // Use curr_cap_ (computed from last_px_ in update_portfolio)
-                    // rather than calc_portfolio_val() which uses orderbook mid prices.
-                    // last_px_ is always the authoritative close price for each symbol.
                     equity_.push_back(curr_cap_);
                     timestamps_.push_back(event->get_timestamp());
                     risk_mgr_->set_capital(init_cap_, curr_cap_);
@@ -242,8 +220,7 @@ public:
     std::vector<int64_t> get_timestamps()   const { return timestamps_; }
 
 private:
-    // Pools are declared first so they are destroyed last. C++ destructs members
-    // in reverse declaration order; pools must outlive all objects allocated from them.
+    // Pools are declared first so they are destroyed last.
     std::pmr::unsynchronized_pool_resource order_pool_;
     std::pmr::unsynchronized_pool_resource event_pool_;
 
@@ -255,10 +232,8 @@ private:
     std::unordered_map<std::string, std::shared_ptr<MarketMaker>>      mms_;
     std::unordered_map<std::string, double>                            last_px_;
     std::unordered_map<std::string, std::deque<double>>                price_history_;
-    // Insertion-order record of symbols for deterministic signal processing.
-    // symbol_order_ preserves add_data call order; symbol_order_index_ gives
-    // O(1) lookup of each symbol's position so the per-bar sort is fast.
-    std::vector<std::string>              symbol_order_;
+    // Insertion order of add_data() calls, for deterministic signal processing.
+    std::vector<std::string>                symbol_order_;
     std::unordered_map<std::string, size_t> symbol_order_index_;
 
     double   init_cap_;
@@ -285,12 +260,8 @@ private:
     ExecutionConfig exec_config_;
 
     static constexpr size_t  PRICE_HISTORY_BUFFER = 10;
-    // Minimum meaningful order size — rejects floating point noise but
-    // allows fractional shares down to 0.00000001.
     static constexpr double  MIN_ORDER_QTY        = 1e-8;
 
-    // Tracks notional reserved by buy signals already processed within the
-    // current bar. Reset to zero when the bar timestamp changes.
     double  intrabar_cash_reserved_ = 0.0;
     int64_t intrabar_timestamp_     = -1;
 
@@ -411,10 +382,7 @@ private:
 
         strat_->on_data(*md);
 
-        // Sort signals by insertion order (the order add_data was called) so
-        // that same-timestamp signals are always processed in a deterministic,
-        // user-controlled sequence. symbol_order_index_ gives O(1) position
-        // lookup so the sort is O(k log k) on the small signals vector.
+        // Sort signals by add_data() insertion order for deterministic processing.
         auto signals = strat_->get_signals();
         std::sort(signals.begin(), signals.end(),
             [this](const std::shared_ptr<SignalEvent>& a,
@@ -456,37 +424,28 @@ private:
 
         double target_pos = 0.0;
 
-        // Reset intrabar reservation when we move to a new bar timestamp.
-        // Signals for the same bar share a timestamp; signals on the next bar
-        // get a fresh reservation budget.
+        // Reset intrabar reservation on new bar timestamp.
         if (sig->get_timestamp() != intrabar_timestamp_) {
             intrabar_cash_reserved_ = 0.0;
             intrabar_timestamp_     = sig->get_timestamp();
         }
 
-        // Available cash = portfolio cash minus what has already been reserved
-        // by earlier signals processed within this same bar. This prevents
-        // over-allocation when many symbols signal simultaneously on one bar.
+        // Available cash accounts for notional already reserved by earlier
+        // signals on the same bar, preventing over-allocation.
         double available_cash = std::max(0.0, portfolio_->get_cash() - intrabar_cash_reserved_);
 
         if (sig->get_signal_type() == SignalType::BUY) {
             if (curr_pos < 0.0) {
-                // Closing a short position: target is flat (0), not a new long.
-                // The delta will be -curr_pos, submitting an exact exit order.
                 target_pos = 0.0;
             } else {
-                // Flat or already long — open or add to a long position.
                 PositionSizingContext ctx(strength, available_cash, curr_px, curr_pos,
                                           portfolio_vol, default_stop_distance_);
                 target_pos = sizer_->calculate_size(ctx);
             }
         } else if (sig->get_signal_type() == SignalType::SELL) {
             if (curr_pos > 0.0) {
-                // Closing a long position: target is flat (0), not a new short.
-                // The delta will be -curr_pos, submitting an exact exit order.
                 target_pos = 0.0;
             } else {
-                // Flat or already short — open or add to a short position.
                 PositionSizingContext ctx(strength, available_cash, curr_px, curr_pos,
                                           portfolio_vol, default_stop_distance_);
                 target_pos = -sizer_->calculate_size(ctx);
@@ -496,14 +455,11 @@ private:
         }
 
         double delta = target_pos - curr_pos;
-        // Reject floating point noise but allow fractional shares
         if (std::abs(delta) < MIN_ORDER_QTY) return;
 
         Side   ord_side = (delta > 0.0) ? Side::Buy : Side::Sell;
         double ord_qty  = std::abs(delta);
 
-        // Reserve the notional cost of this buy so subsequent signals on the
-        // same bar see reduced available cash and don't over-allocate.
         if (ord_side == Side::Buy) {
             intrabar_cash_reserved_ += ord_qty * curr_px;
         }
@@ -516,8 +472,6 @@ private:
             ? curr_px * (1.0 + spread / 2.0)
             : curr_px * (1.0 - spread / 2.0);
 
-        // Notify the strategy if risk limits reject the order so it can
-        // react (e.g. reduce position targets, log, or halt trading).
         auto risk_check = risk_mgr_->check_order(sig->get_symbol(), ord_side, ord_qty, ord_px);
         if (!risk_check.is_approved()) {
             strat_->on_rejected(sig->get_symbol(), risk_check.reason);
@@ -548,7 +502,6 @@ private:
         }
 
         Price    px_cents = static_cast<Price>(ord->get_price() * 100.0);
-        // Quantity stays as double — no cast to uint32_t, preserving fractional shares
         Quantity qty      = ord->get_quantity();
 
         auto order = std::make_shared<Order>(
@@ -568,9 +521,7 @@ private:
                 ? raw_price * (1.0 + slippage_pct)
                 : raw_price * (1.0 - slippage_pct);
 
-            // Mirror the fee calculation in ExecutionEngine::calculate_fee so
-            // the commission field on FillEvent matches what is booked to P&L.
-            // Strategy orders always cross the spread and are charged taker fees.
+            // Mirror ExecutionEngine::calculate_fee — strategy orders are taker.
             double commission = fill_price
                                 * our_trade.quantity_
                                 * exec_config_.taker_fee;
