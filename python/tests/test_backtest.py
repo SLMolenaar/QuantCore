@@ -15,7 +15,7 @@ class TestBasicImports:
     def test_version(self):
         version = qc.version()
         assert isinstance(version, str)
-        assert version == "0.1.8.7"
+        assert version == "0.1.8.8"
 
     def test_hello(self):
         assert "QuantCore" in qc.hello()
