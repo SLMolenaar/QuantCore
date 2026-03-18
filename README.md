@@ -24,6 +24,7 @@ Market Data → EventQueue → Strategy → Signal → OrderBook → Fill → Po
 ## Quick Start
 
 ```python
+# pip install quantcore
 import quantcore as qc
 
 class MyStrategy(qc.Strategy):
