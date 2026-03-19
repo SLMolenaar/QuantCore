@@ -433,6 +433,7 @@ quantcore/
 | Python strategy API | ✅ pybind11       | ✅ native   | ✅ native |
 | Throughput (bars/s) | ~300K             | ~7.7K       | unverified |
 | Maintenance | Active           | Stale      | Inactive |
+
 *Throughput measured on SMA(50/200) crossover, 50K daily bars, Release build, Windows.
 Reproduce: `python benchmarks/qcVsBacktrader.py --bars 50000 --runs 20`*
 
