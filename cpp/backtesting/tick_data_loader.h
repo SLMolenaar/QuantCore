@@ -86,6 +86,15 @@ public:
         BarSeries bars;
         const std::string& symbol = ticks.front().symbol;
 
+        // all ticks must share the same symbol
+        for (const auto& t : ticks) {
+            if (t.symbol != symbol)
+                throw std::invalid_argument(
+                    "aggregate_to_bars: mixed symbols in TickSeries ('" +
+                    symbol + "' vs '" + t.symbol + "'). Split by symbol first."
+                );
+        }
+
         int64_t bar_start = (ticks.front().timestamp_ns / bar_duration_ns) * bar_duration_ns;
         double  open = 0, high = 0, low = 0, close = 0, volume = 0;
         bool    has_ticks = false;
@@ -134,7 +143,7 @@ private:
             tokens.push_back(token);
 
         if (tokens.size() < 3 || tokens.size() > 5)
-            throw std::runtime_error("Expected 3-4 columns, got " +
+            throw std::runtime_error("Expected 3-5 columns, got " +
                                      std::to_string(tokens.size()));
 
         TickData tick;

@@ -28,7 +28,7 @@ _ALIASES = {
 }
 
 _SIDE_BUY  = {"b", "buy",  "bid", "1",  "long"}
-_SIDE_SELL = {"s", "sell", "ask", "ask", "-1", "short"}
+_SIDE_SELL = {"s", "sell", "-1", "short"}
 
 
 def _resolve_columns(columns: list[str]) -> dict[str, str]:

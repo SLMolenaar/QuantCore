@@ -70,6 +70,14 @@ TEST(TickDataLoader, AggregateInvalidDuration) {
     EXPECT_THROW(TickDataLoader::aggregate_to_bars(ticks, -1), std::invalid_argument);
 }
 
+TEST(TickDataLoader, AggregateMixedSymbolsThrows) {
+    TickSeries mixed;
+    mixed.emplace_back("AAPL", 0LL,              100.0, 10.0);
+    mixed.emplace_back("MSFT", 1'000'000'000LL,  200.0, 10.0);
+    EXPECT_THROW(TickDataLoader::aggregate_to_bars(mixed, 60'000'000'000LL),
+                 std::invalid_argument);
+}
+
 TEST(TickDataLoader, AggregateSingleBar) {
     // four ticks inside one 1-minute bar
     // base is aligned to a bar boundary to guarantee all ticks fall in the same bucket
