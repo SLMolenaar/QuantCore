@@ -7,6 +7,7 @@
 #include "fill_event.h"
 #include "strategy.h"
 #include "bar_data.h"
+#include "tick_data.h"
 #include "market_maker.h"
 #include "position_sizer.h"
 #include "risk_manager.h"
@@ -39,6 +40,7 @@ public:
         , mm_levels_(5)
         , mm_spread_(0.0001)
         , mm_depth_(100000)
+        , mm_refresh_interval_ns_(0)   // 0 = refresh every event
         , default_volatility_(0.02)
         , default_stop_distance_(0.05)
         , volatility_lookback_(20)
@@ -64,6 +66,23 @@ public:
             symbol_order_.push_back(symbol);
         }
         data_[symbol]          = bars;
+        tick_data_.erase(symbol); // clear any previously loaded tick data for this symbol
+        engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
+        mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
+        price_history_[symbol] = std::deque<double>();
+    }
+
+    void add_tick_data(const std::string& symbol, const TickSeries& ticks) {
+        if (ticks.empty())
+            throw std::invalid_argument("Cannot add empty tick series");
+        if (tick_data_.find(symbol) == tick_data_.end()) {
+            if (data_.find(symbol) == data_.end()) {
+                symbol_order_index_[symbol] = symbol_order_.size();
+                symbol_order_.push_back(symbol);
+            }
+        }
+        tick_data_[symbol]     = ticks;
+        data_.erase(symbol);  // clear any previously loaded bar data for this symbol
         engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
         mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
         price_history_[symbol] = std::deque<double>();
@@ -94,6 +113,17 @@ public:
         mm_depth_  = depth;
     }
 
+    // Minimum nanoseconds between market-maker quote refreshes per symbol.
+    // Useful with tick data to avoid refreshing on every single tick.
+    // 0 (default) means refresh on every event.
+    void set_mm_refresh_interval(int64_t interval_ns) {
+        if (interval_ns < 0)
+            throw std::invalid_argument("Market maker refresh interval cannot be negative");
+        mm_refresh_interval_ns_ = interval_ns;
+    }
+
+    int64_t get_mm_refresh_interval() const { return mm_refresh_interval_ns_; }
+
     void set_volatility_params(double default_vol, double stop_distance, size_t lookback) {
         if (default_vol   <= 0.0 || default_vol   > 1.0) throw std::invalid_argument("Default volatility must be between 0 and 1");
         if (stop_distance <= 0.0 || stop_distance > 1.0) throw std::invalid_argument("Stop distance must be between 0 and 1");
@@ -109,9 +139,21 @@ public:
 
     size_t get_bars_per_year() const { return bars_per_year_; }
 
+    // Nanosecond interval at which the equity curve is snapshotted during
+    // tick-mode runs. 0 (default) means one snapshot per bar (bar mode) or
+    // one snapshot per tick (tick mode — can be very dense).
+    // Set to e.g. 60_000_000_000 to snapshot once per minute.
+    void set_equity_snapshot_interval(int64_t interval_ns) {
+        if (interval_ns < 0)
+            throw std::invalid_argument("Equity snapshot interval cannot be negative");
+        equity_snapshot_interval_ns_ = interval_ns;
+    }
+
+    int64_t get_equity_snapshot_interval() const { return equity_snapshot_interval_ns_; }
+
     double run() {
         if (!strat_) throw std::runtime_error("No strategy set");
-        if (data_.empty()) throw std::runtime_error("No market data loaded");
+        if (data_.empty() && tick_data_.empty()) throw std::runtime_error("No market data loaded");
 
         eq_.clear();
         last_px_.clear();
@@ -130,7 +172,15 @@ public:
         equity_.clear();
         timestamps_.clear();
 
+        mm_last_refresh_.clear();
+        last_equity_snapshot_ns_ = -1;
+
         for (const auto& [symbol, bars] : data_) {
+            engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
+            mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
+            price_history_[symbol] = std::deque<double>();
+        }
+        for (const auto& [symbol, ticks] : tick_data_) {
             engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
             mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
             price_history_[symbol] = std::deque<double>();
@@ -140,6 +190,10 @@ public:
         for (const auto& [symbol, bars] : data_) {
             if (!bars.empty() && bars.front().timestamp_ns < first_bar_timestamp_)
                 first_bar_timestamp_ = bars.front().timestamp_ns;
+        }
+        for (const auto& [symbol, ticks] : tick_data_) {
+            if (!ticks.empty() && ticks.front().timestamp_ns < first_bar_timestamp_)
+                first_bar_timestamp_ = ticks.front().timestamp_ns;
         }
         if (first_bar_timestamp_ == std::numeric_limits<int64_t>::max())
             first_bar_timestamp_ = 0;
@@ -161,28 +215,10 @@ public:
 
             if (event->get_type() == EventType::MARKET_DATA) {
                 update_portfolio();
+                maybe_snapshot_equity(event->get_timestamp());
 
-                // Snapshot equity once per bar, after all symbols for this
-                // timestamp have been processed. Peeking at the next event:
-                // if it's a MARKET_DATA event with the same timestamp, more
-                // symbols are still pending for this bar.
-                bool is_last_md_for_bar = true;
-                if (!eq_.empty()) {
-                    auto next = eq_.peek();
-                    if (next->get_type() == EventType::MARKET_DATA &&
-                        next->get_timestamp() == event->get_timestamp()) {
-                        is_last_md_for_bar = false;
-                    }
-                }
-
-                if (is_last_md_for_bar) {
-                    equity_.push_back(curr_cap_);
-                    timestamps_.push_back(event->get_timestamp());
-                    risk_mgr_->set_capital(init_cap_, curr_cap_);
-
-                    if (should_halt())
-                        flatten_all_positions(event->get_timestamp());
-                }
+                if (should_halt())
+                    flatten_all_positions(event->get_timestamp());
             }
         }
 
@@ -219,6 +255,10 @@ public:
     std::vector<double>  get_equity_curve() const { return equity_; }
     std::vector<int64_t> get_timestamps()   const { return timestamps_; }
 
+    bool has_tick_data(const std::string& symbol) const {
+        return tick_data_.find(symbol) != tick_data_.end();
+    }
+
 private:
     // Pools are declared first so they are destroyed last.
     std::pmr::unsynchronized_pool_resource order_pool_;
@@ -228,6 +268,7 @@ private:
     std::shared_ptr<Strategy> strat_;
 
     std::unordered_map<std::string, BarSeries>                         data_;
+    std::unordered_map<std::string, TickSeries>                        tick_data_;
     std::unordered_map<std::string, std::shared_ptr<ExecutionEngine>>  engines_;
     std::unordered_map<std::string, std::shared_ptr<MarketMaker>>      mms_;
     std::unordered_map<std::string, double>                            last_px_;
@@ -235,6 +276,8 @@ private:
     // Insertion order of add_data() calls, for deterministic signal processing.
     std::vector<std::string>                symbol_order_;
     std::unordered_map<std::string, size_t> symbol_order_index_;
+    // Last timestamp at which the market maker was refreshed per symbol.
+    std::unordered_map<std::string, int64_t> mm_last_refresh_;
 
     double   init_cap_;
     double   curr_cap_;
@@ -251,6 +294,7 @@ private:
     int      mm_levels_;
     double   mm_spread_;
     Quantity mm_depth_;
+    int64_t  mm_refresh_interval_ns_;
 
     double          default_volatility_;
     double          default_stop_distance_;
@@ -258,6 +302,11 @@ private:
     size_t          bars_per_year_;
     int64_t         first_bar_timestamp_;
     ExecutionConfig exec_config_;
+
+    // Interval for equity curve snapshots during tick runs.
+    // -1 means not yet initialised; 0 means snapshot every event.
+    int64_t equity_snapshot_interval_ns_ = 0;
+    int64_t last_equity_snapshot_ns_     = -1;
 
     static constexpr size_t  PRICE_HISTORY_BUFFER = 10;
     static constexpr double  MIN_ORDER_QTY        = 1e-8;
@@ -272,11 +321,22 @@ private:
     }
 
     void load_data() {
+        // bar data
         for (const auto& [symbol, bars] : data_) {
             for (const auto& bar : bars) {
                 auto event = make_event<MarketDataEvent>(
                     symbol, bar.timestamp_ns,
                     bar.open, bar.high, bar.low, bar.close, bar.volume
+                );
+                eq_.push(event);
+            }
+        }
+
+        // tick data — each tick becomes a MarketDataEvent with open=high=low=close=price
+        for (const auto& [symbol, ticks] : tick_data_) {
+            for (const auto& tick : ticks) {
+                auto event = make_event<MarketDataEvent>(
+                    symbol, tick.timestamp_ns, tick.price, tick.quantity
                 );
                 eq_.push(event);
             }
@@ -309,6 +369,37 @@ private:
                 total_position_value += std::abs(pos * px_it->second);
         }
         portfolio_->set_cash(curr_cap_ - total_position_value);
+    }
+
+    // Snapshot equity at most once per equity_snapshot_interval_ns_.
+    // In bar mode (interval == 0) this reduces to the original one-per-bar logic:
+    // we only snapshot when all symbols for the current timestamp are processed.
+    void maybe_snapshot_equity(int64_t timestamp) {
+        if (equity_snapshot_interval_ns_ == 0) {
+            // original bar-mode behaviour: snapshot after the last symbol of each bar
+            bool is_last_md_for_bar = true;
+            if (!eq_.empty()) {
+                auto next = eq_.peek();
+                if (next->get_type() == EventType::MARKET_DATA &&
+                    next->get_timestamp() == timestamp) {
+                    is_last_md_for_bar = false;
+                }
+            }
+            if (is_last_md_for_bar) {
+                equity_.push_back(curr_cap_);
+                timestamps_.push_back(timestamp);
+                risk_mgr_->set_capital(init_cap_, curr_cap_);
+            }
+        } else {
+            // tick mode: snapshot at most once per interval
+            if (last_equity_snapshot_ns_ < 0 ||
+                timestamp - last_equity_snapshot_ns_ >= equity_snapshot_interval_ns_) {
+                equity_.push_back(curr_cap_);
+                timestamps_.push_back(timestamp);
+                risk_mgr_->set_capital(init_cap_, curr_cap_);
+                last_equity_snapshot_ns_ = timestamp;
+            }
+        }
     }
 
     double calculate_volatility(const std::string& symbol) const {
@@ -363,6 +454,18 @@ private:
         }
     }
 
+    // Returns true if the market maker should refresh its quotes for this symbol now.
+    bool should_refresh_mm(const std::string& symbol, int64_t timestamp) {
+        if (mm_refresh_interval_ns_ == 0) return true;
+        auto it = mm_last_refresh_.find(symbol);
+        if (it == mm_last_refresh_.end() ||
+            timestamp - it->second >= mm_refresh_interval_ns_) {
+            mm_last_refresh_[symbol] = timestamp;
+            return true;
+        }
+        return false;
+    }
+
     void handle_md(EventPtr event) {
         auto md      = std::static_pointer_cast<MarketDataEvent>(event);
         auto symbol  = md->get_symbol();
@@ -376,7 +479,7 @@ private:
         auto ee_it = engines_.find(symbol);
         if (ee_it != engines_.end()) {
             auto mm_it = mms_.find(symbol);
-            if (mm_it != mms_.end())
+            if (mm_it != mms_.end() && should_refresh_mm(symbol, md->get_timestamp()))
                 mm_it->second->update_quotes(*ee_it->second, *md);
         }
 
@@ -551,4 +654,4 @@ private:
     double calc_portfolio_val() const { return init_cap_ + get_total_pnl(); }
 };
 
-}
+} // namespace quantcore

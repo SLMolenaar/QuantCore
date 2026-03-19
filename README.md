@@ -19,9 +19,14 @@ The C++ core handles all the performance-critical work: event dispatch, order ma
 Market Data → EventQueue → Strategy → Signal → OrderBook → Fill → Portfolio
 ```
 
+Both bar data and tick data are supported. The engine is bar-agnostic internally - ticks become
+`MarketDataEvent` objects like bars do, so strategies work unchanged across both data types.
+
 ---
 
 ## Quick Start
+
+### Bar data
 
 ```python
 # pip install quantcore
@@ -34,10 +39,34 @@ class MyStrategy(qc.Strategy):
 
 results = qc.run_backtest(
     strategy=MyStrategy(),
-    data={'AAPL': qc.load_csv_data('AAPL', 'data/aapl.csv')},
+    data={'AAPL': qc.load_csv_data('data/aapl.csv', 'AAPL')},
     initial_capital=100_000.0,
 )
 print(results)
+```
+
+### Tick data
+
+```python
+results = qc.run_tick_backtest(
+    strategy=MyStrategy(),
+    tick_data={'AAPL': qc.load_tick_csv('data/aapl_ticks.csv', 'AAPL')},
+    initial_capital=100_000.0,
+    mm_refresh_interval_ns=1_000_000_000,   # refresh MM quotes once per second
+    equity_snapshot_interval_ns=60_000_000_000,  # snapshot equity once per minute
+)
+print(results)
+```
+
+The same strategy class works for both. `event.close` is the tick price when running on tick data.
+
+You can also aggregate ticks to bars before running:
+
+```python
+ticks = qc.load_tick_csv('data/aapl_ticks.csv', 'AAPL')
+bars  = qc.aggregate_ticks_to_bars(ticks, bar_duration_ns=60_000_000_000)  # 1-minute bars
+
+results = qc.run_backtest(strategy=MyStrategy(), data={'AAPL': bars}, initial_capital=100_000.0)
 ```
 
 The engine handles fills, position tracking, and PnL automatically. For a full tearsheet:
@@ -52,6 +81,7 @@ returns = calculate_returns(equity)
 print(calculate_all_metrics(equity))
 plot_full_tearsheet(equity, returns)
 ```
+
 For the full API reference and usage guide, see [docs/usage.md](docs/usage.md).
 
 ---
@@ -67,7 +97,7 @@ Every action goes through the event queue. When a strategy calls `generate_signa
 
 ### Python Strategy
 
-Subclass `qc.Strategy` and implement `on_data`. Signals drive order execution. You don't place orders directly, you generate signals and the engine handles the rest.
+Subclass `qc.Strategy` and implement `on_data`. The same strategy works for bar and tick data - `event.close` is the close price for bars and the trade price for ticks.
 
 ```python
 class BollingerBreakout(qc.Strategy):
@@ -127,6 +157,69 @@ Built-in sizers: `FixedPercentage`, `RiskBased`, `KellyCriterion`, `EqualWeight`
 
 ---
 
+## Tick Data
+
+### Loading
+
+```python
+# from CSV - columns: timestamp, price, quantity  (or with side: B/S/buy/sell)
+ticks = qc.load_tick_csv('data/aapl_ticks.csv', 'AAPL')
+
+# from Parquet
+ticks = qc.load_tick_parquet('data/aapl_ticks.parquet', 'AAPL')
+
+# numpy fast path - (N, 4) array: [timestamp_ns, price, quantity, side]
+# side: 0.0 = Buy, 1.0 = Sell
+arr = qc.load_tick_parquet('data/aapl_ticks.parquet', use_numpy=True)
+engine.add_tick_data('AAPL', arr)
+```
+
+### Aggregation
+
+```python
+# aggregate to any bar duration
+bars_1min  = qc.aggregate_ticks_to_bars(ticks, bar_duration_ns=60_000_000_000)
+bars_1hour = qc.aggregate_ticks_to_bars(ticks, bar_duration_ns=3_600_000_000_000)
+bars_1day  = qc.aggregate_ticks_to_bars(ticks, bar_duration_ns=86_400_000_000_000)
+```
+
+### Engine configuration for tick data
+
+Two settings matter most for tick performance:
+
+```python
+engine = qc.BacktestEngine(100_000.0)
+engine.add_tick_data('AAPL', ticks)
+
+# How often the market maker refreshes its quotes.
+# 0 = every tick (default, slowest). 1s interval gives ~5x speedup on 1-second tick data.
+engine.set_mm_refresh_interval(1_000_000_000)       # 1 second
+
+# How often the equity curve is snapshotted.
+# 0 = every tick (default). Has negligible performance impact but keeps the
+# equity curve manageable for large tick datasets.
+engine.set_equity_snapshot_interval(60_000_000_000) # 1 minute
+```
+
+`run_tick_backtest()` sets both to sensible defaults (1s and 60s respectively).
+
+### CSV format
+
+```
+timestamp,price,quantity
+1700000000,150.25,100
+1700000001,150.30,50
+
+# with aggressor side
+timestamp,price,quantity,side
+1700000000,150.25,100,buy
+1700000001,150.30,50,sell
+```
+
+Timestamps in seconds, milliseconds, microseconds, or nanoseconds - detected automatically.
+
+---
+
 ## Execution Simulation
 
 ### Order Types
@@ -173,9 +266,7 @@ Single-threaded. Measured on Windows (Release build, MSVC). Full results in [`be
 | Add + cancel (market-maker quote refresh) | 13.0 M ops/s |
 | Add + match (taker sweep) | 4.9 M ops/s |
 
-These are raw order book operations with no engine overhead. The matching engine is not the bottleneck at daily-bar scale.
-
-**End-to-end backtest**
+**End-to-end backtest - bar mode**
 
 | Scenario | Bars/s | Latency (p99) |
 |---|---|---|
@@ -183,15 +274,28 @@ These are raw order book operations with no engine overhead. The matching engine
 | 5-year (1,260 bars) | ~270 K bars/s | - |
 | 1,000-year stress (252,000 bars) | ~290 K bars/s | - |
 
-Throughput is stable across dataset sizes. A 1-year daily backtest completes in under 1 ms at p99.
+**End-to-end backtest - tick mode**
+
+| Scenario | Ticks/s | Wall time |
+|---|---|---|
+| 10K ticks, no MM throttle | 315 K/s | 31.7 ms |
+| 10K ticks, 1s MM throttle | 1.66 M/s | 6.0 ms |
+| 10K ticks, 10s MM throttle | 2.78 M/s | 3.6 ms |
+| 1M ticks → 1-min bars (aggregation) | 247 M/s | 4.1 ms |
+
+The market-maker refresh interval is the main performance lever for tick data. With a 1-second
+throttle the engine processes 1-second tick data at ~5x the unthrottled rate. See
+[`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) for the full breakdown.
 
 Run the benchmarks yourself:
 
 ```bash
-cmake --build build --target bench_backtest_engine
+cmake --build build --target bench_backtest_engine bench_tick_data
 ./build/bench_backtest_engine
+./build/bench_tick_data
 
 python benchmarks/bench_python.py
+python benchmarks/bench_tick_python.py
 ```
 
 ---
@@ -291,6 +395,8 @@ For the full Python API reference, see [`docs/usage.md`](docs/usage.md).
 quantcore/
 ├── cpp/
 │   ├── backtesting/          # Engine, events, portfolio
+│   │   ├── tick_data.h       # TickData struct and TickSeries
+│   │   └── tick_data_loader.h# CSV loader and aggregate_to_bars
 │   ├── strategies/           # C++ strategy implementations
 │   ├── orderbook/            # Order book (from orderbook-simulator-cpp)
 │   └── tests/                # GoogleTest suite
@@ -298,11 +404,17 @@ quantcore/
 │   ├── quantcore/            # Python package
 │   │   ├── __init__.py       # Public API
 │   │   ├── analytics.py      # Performance metrics
-│   │   └── plotting.py       # Visualizations
+│   │   ├── plotting.py       # Visualizations
+│   │   └── tick_parquet_loader.py  # Parquet loader for tick data
 │   ├── bindings.cpp          # pybind11 bindings
 │   └── build_module.py       # Build helper
 ├── examples/                 # Jupyter notebooks
 ├── benchmarks/               # Benchmark suite
+│   ├── bench_backtest_engine.cpp
+│   ├── bench_tick_data.cpp
+│   ├── bench_python.py
+│   ├── bench_tick_python.py
+│   └── RESULTS.md
 ├── CMakeLists.txt
 └── README.md
 ```
@@ -315,13 +427,14 @@ quantcore/
 |---|------------------|------------|---|
 | Core language | C++20            | Python     | Python |
 | Order book simulation | ✅ Real LOB       | ❌          | ❌ |
+| Tick data support | ✅ Native         | ❌          | ❌ |
 | Event-driven | ✅                | ✅          | ✅ |
 | Look-ahead prevention | ✅ Priority queue | ✅          | ✅ |
 | Python strategy API | ✅ pybind11       | ✅ native   | ✅ native |
 | Throughput (bars/s) | ~300K             | ~7.7K       | unverified |
 | Maintenance | Active           | Stale      | Inactive |
 *Throughput measured on SMA(50/200) crossover, 50K daily bars, Release build, Windows.
-Reproduce: `python benchmarks/benchmark_quantcore_vs_backtrader.py --bars 50000 --runs 20`*
+Reproduce: `python benchmarks/qcVsBacktrader.py --bars 50000 --runs 20`*
 
 The main differentiator is the order book. Backtrader and Zipline assume you fill at the bar's close price. QuantCore routes orders through a real price-time priority matching engine, which gives you realistic partial fills, spread simulation, and tick-level execution when you have tick data.
 
@@ -333,7 +446,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Open areas if you want to dig in:
 
 - **Stop / Stop-Limit orders**: order type enum and matching engine
 - **VWAP / TWAP algos**: `ExecutionEngine`, child order slicing
-- **Tick data pipeline**: the engine is bar-agnostic internally; the data loader needs extending
 - **Trading calendar**: holiday/early-close filtering before bars hit the engine
 - **Multi-strategy portfolio**: shared capital across strategies with a meta-allocator
 - **Parallel sweeps on Linux**: `n_jobs` exists but Windows spawn overhead kills it; a Linux worker pool would make it actually useful
@@ -341,7 +453,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Open areas if you want to dig in:
 The engine doesn't handle corporate actions, survivorship bias, or timezone normalization. Feed it clean adjusted data and none of those are problems.
 
 ---
-
 
 ## License
 

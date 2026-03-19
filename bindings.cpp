@@ -7,6 +7,8 @@
 #include "backtesting/backtest_engine.h"
 #include "backtesting/data_loader.h"
 #include "backtesting/bar_data.h"
+#include "backtesting/tick_data.h"
+#include "backtesting/tick_data_loader.h"
 #include "backtesting/market_data_event.h"
 #include "backtesting/signal_event.h"
 #include "backtesting/order_event.h"
@@ -98,7 +100,25 @@ PYBIND11_MODULE(_core, m) {
         });
 
     // ============================================================================
-    // DATA LOADER
+    // TICK DATA
+    // ============================================================================
+
+    py::class_<TickData>(m, "TickData")
+        .def(py::init<>())
+        .def(py::init<const std::string&, int64_t, double, double, Side>(),
+             py::arg("symbol"), py::arg("timestamp_ns"), py::arg("price"),
+             py::arg("quantity"), py::arg("aggressor_side") = Side::Buy)
+        .def_readwrite("symbol",         &TickData::symbol)
+        .def_readwrite("timestamp_ns",   &TickData::timestamp_ns)
+        .def_readwrite("price",          &TickData::price)
+        .def_readwrite("quantity",       &TickData::quantity)
+        .def_readwrite("aggressor_side", &TickData::aggressor_side)
+        .def("__repr__", [](const TickData& t) {
+            return "<TickData " + t.symbol + " @ " + std::to_string(t.price) + ">";
+        });
+
+    // ============================================================================
+    // DATA LOADERS
     // ============================================================================
 
     py::class_<CSVDataLoader>(m, "CSVDataLoader")
@@ -107,6 +127,15 @@ PYBIND11_MODULE(_core, m) {
                     py::arg("symbol")       = "",
                     py::arg("has_header")   = true,
                     py::arg("max_skip_pct") = 0.20);
+
+    py::class_<TickDataLoader>(m, "TickDataLoader")
+        .def_static("load", &TickDataLoader::load,
+                    py::arg("filepath"),
+                    py::arg("symbol")       = "",
+                    py::arg("has_header")   = true,
+                    py::arg("max_skip_pct") = 0.20)
+        .def_static("aggregate_to_bars", &TickDataLoader::aggregate_to_bars,
+                    py::arg("ticks"), py::arg("bar_duration_ns"));
 
     // ============================================================================
     // EVENTS
@@ -272,14 +301,15 @@ PYBIND11_MODULE(_core, m) {
              py::arg("exec_config") = ExecutionConfig())
 
         // List[BarData] overload — kept for backward compatibility.
-        .def("add_data", &BacktestEngine::add_data,
+        .def("add_data",
+             py::overload_cast<const std::string&, const BarSeries&>(&BacktestEngine::add_data),
              py::arg("symbol"), py::arg("bars"))
 
         // (N, 6) float64 numpy array: [timestamp_ns, open, high, low, close, volume].
         // One boundary crossing instead of N individual pybind11 object crossings;
         // roughly 3-5x faster for large datasets.
         //
-        // Note: timestamp_ns is cast double→int64. float64 has 53-bit mantissa so
+        // Note: timestamp_ns is cast double->int64. float64 has 53-bit mantissa so
         // timestamps > 2^53 ns (~year 2255) lose sub-microsecond precision — fine
         // for current-era UNIX nanosecond timestamps.
         .def("add_data",
@@ -305,6 +335,37 @@ PYBIND11_MODULE(_core, m) {
             },
             py::arg("symbol"), py::arg("data"))
 
+        // List[TickData] overload.
+        .def("add_tick_data",
+             py::overload_cast<const std::string&, const TickSeries&>(&BacktestEngine::add_tick_data),
+             py::arg("symbol"), py::arg("ticks"))
+
+        // (N, 4) float64 numpy array: [timestamp_ns, price, quantity, side].
+        // side encoding: 0.0 = Buy, 1.0 = Sell.
+        .def("add_tick_data",
+            [](BacktestEngine& self, const std::string& symbol,
+               py::array_t<double, py::array::c_style | py::array::forcecast> data) {
+                py::buffer_info buf = data.request();
+                if (buf.ndim != 2 || buf.shape[1] != 4)
+                    throw std::invalid_argument(
+                        "data must be shape (N, 4): "
+                        "[timestamp_ns, price, quantity, side]"
+                    );
+                const Py_ssize_t n = buf.shape[0];
+                TickSeries ticks;
+                ticks.reserve(static_cast<size_t>(n));
+                const double* ptr = static_cast<const double*>(buf.ptr);
+                for (Py_ssize_t i = 0; i < n; ++i) {
+                    const double* row = ptr + i * 4;
+                    Side side = (row[3] >= 0.5) ? Side::Sell : Side::Buy;
+                    ticks.emplace_back(symbol,
+                        static_cast<int64_t>(row[0]),
+                        row[1], row[2], side);
+                }
+                self.add_tick_data(symbol, ticks);
+            },
+            py::arg("symbol"), py::arg("data"))
+
         .def("set_strategy",         &BacktestEngine::set_strategy,
              py::arg("strategy"), py::keep_alive<1, 2>())
         .def("run",                  &BacktestEngine::run)
@@ -325,7 +386,14 @@ PYBIND11_MODULE(_core, m) {
         .def("set_volatility_params", &BacktestEngine::set_volatility_params,
              py::arg("default_vol"), py::arg("stop_distance"), py::arg("lookback"))
         .def("configure_market_maker", &BacktestEngine::configure_market_maker,
-             py::arg("levels"), py::arg("spread"), py::arg("depth"));
+             py::arg("levels"), py::arg("spread"), py::arg("depth"))
+        .def("set_mm_refresh_interval", &BacktestEngine::set_mm_refresh_interval,
+             py::arg("interval_ns"))
+        .def("get_mm_refresh_interval", &BacktestEngine::get_mm_refresh_interval)
+        .def("set_equity_snapshot_interval", &BacktestEngine::set_equity_snapshot_interval,
+             py::arg("interval_ns"))
+        .def("get_equity_snapshot_interval", &BacktestEngine::get_equity_snapshot_interval)
+        .def("has_tick_data",        &BacktestEngine::has_tick_data, py::arg("symbol"));
 
     // ============================================================================
     // POSITION SIZING
@@ -413,7 +481,6 @@ PYBIND11_MODULE(_core, m) {
         .def("get_limits",   &RiskManager::get_limits)
         .def("check_order",  &RiskManager::check_order,
              py::arg("symbol"), py::arg("side"), py::arg("quantity"), py::arg("price"))
-        // .def("update_position",       &RiskManager::update_position)
         .def("reset",                 &RiskManager::reset)
         .def("get_all_positions",     &RiskManager::get_all_positions)
         .def("calculate_total_exposure", static_cast<double(RiskManager::*)() const>(

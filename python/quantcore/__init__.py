@@ -4,20 +4,15 @@ from typing import List, Dict, Optional
 import warnings
 
 _current_dir = Path(__file__).parent
-if str(_current_dir) not in sys.path:
-    sys.path.insert(0, str(_current_dir))
 
 try:
     from . import _core
-except ImportError:
-    try:
-        import _core
-    except ImportError as e:
-        raise ImportError(
-            f"Failed to import C++ extension.\n"
-            f"Module should be at: {_current_dir / '_core.cp312-win_amd64.pyd'}\n"
-            f"Did you build it? Run: python python/build_module.py"
-        ) from e
+except ImportError as e:
+    raise ImportError(
+        f"Failed to import C++ extension.\n"
+        f"Module should be at: {_current_dir / '_core.cp312-win_amd64.pyd'}\n"
+        f"Did you build it? Run: python python/build_module.py"
+    ) from e
 
 # ============================================================================
 # C++ EXPORTS
@@ -29,6 +24,9 @@ OrderType  = _core.OrderType
 
 BarData       = _core.BarData
 CSVDataLoader = _core.CSVDataLoader
+
+TickData       = _core.TickData
+TickDataLoader = _core.TickDataLoader
 
 MarketDataEvent = _core.MarketDataEvent
 SignalEvent     = _core.SignalEvent
@@ -74,6 +72,7 @@ version = _core.version
 # hierarchy that BacktestEngine uses internally.
 from .position_sizing import PositionCalculator, PortfolioPositionSizer
 from .parquet_loader import ParquetDataLoader
+from .tick_parquet_loader import TickParquetLoader
 
 
 def load_parquet_data(
@@ -114,6 +113,59 @@ def load_csv_data(filepath: str, symbol: str = "", has_header: bool = True) -> L
     return CSVDataLoader.load(filepath, symbol, has_header)
 
 
+def load_tick_csv(filepath: str, symbol: str = "", has_header: bool = True) -> List[TickData]:
+    """
+    Load tick data from a CSV file.
+
+    Accepted column layouts (auto-detected by column count):
+      3 cols: timestamp, price, quantity
+      4 cols: timestamp, price, quantity, side
+      5 cols: symbol, timestamp, price, quantity, side
+
+    side values: B/b/buy/BUY or S/s/sell/SELL
+    Timestamps in seconds, milliseconds, microseconds, or nanoseconds.
+    """
+    return TickDataLoader.load(filepath, symbol, has_header)
+
+
+def load_tick_parquet(
+        filepath: str,
+        symbol: str = "",
+        use_numpy: bool = True,
+):
+    """
+    Load tick data from a Parquet file.
+
+    Args:
+        filepath:  Path to the .parquet file.
+        symbol:    Symbol name to assign when no 'symbol' column is present.
+        use_numpy: When True (default), returns a (N, 4) float64 numpy array
+                   [timestamp_ns, price, quantity, side] suitable for
+                   BacktestEngine.add_tick_data(symbol, array).
+                   When False, returns List[TickData].
+
+    Requires: pyarrow  (pip install pyarrow)
+    """
+    if use_numpy:
+        return TickParquetLoader.load_numpy(filepath)
+    return TickParquetLoader.load(filepath, symbol)
+
+
+def aggregate_ticks_to_bars(ticks: List[TickData], bar_duration_ns: int) -> List[BarData]:
+    """
+    Aggregate a list of TickData objects into OHLCV bars.
+
+    Args:
+        ticks:           List of TickData objects (must be sorted by timestamp).
+        bar_duration_ns: Bar width in nanoseconds.
+                         Common values:
+                           1_000_000_000      -- 1 second
+                           60_000_000_000     -- 1 minute
+                           3_600_000_000_000  -- 1 hour
+    """
+    return TickDataLoader.aggregate_to_bars(ticks, bar_duration_ns)
+
+
 def create_backtest(
         initial_capital: float = 100000.0,
         data: Optional[Dict[str, List[BarData]]] = None,
@@ -150,6 +202,54 @@ def run_backtest(
     BacktestEngine directly.
     """
     engine      = create_backtest(initial_capital, data, strategy)
+    final_value = engine.run()
+
+    return BacktestResults({
+        'strategy':        strategy.get_name(),
+        'initial_capital': initial_capital,
+        'final_value':     final_value,
+        'total_pnl':       engine.get_total_pnl(),
+        'total_fees':      engine.get_total_fees(),
+        'return_pct':      (final_value / initial_capital - 1.0) * 100.0,
+        'equity_curve':    engine.get_equity_curve(),
+        'timestamps':      engine.get_timestamps(),
+        'trade_pnls':      engine.get_trade_pnls(),
+    })
+
+
+def run_tick_backtest(
+        strategy: Strategy,
+        tick_data: Dict[str, List[TickData]],
+        initial_capital: float = 100000.0,
+        mm_refresh_interval_ns: int = 1_000_000_000,
+        equity_snapshot_interval_ns: int = 60_000_000_000,
+) -> "BacktestResults":
+    """
+    Run a backtest on tick data and return a BacktestResults object.
+
+    Sensible defaults are applied for tick mode:
+      - Market maker refresh interval: 1 second (avoids refreshing on every tick).
+      - Equity snapshot interval: 1 minute (keeps the equity curve manageable).
+
+    Both can be overridden. Pass 0 for either interval to revert to
+    event-by-event behaviour (not recommended for large tick datasets).
+
+    Args:
+        strategy:                    Strategy instance.
+        tick_data:                   Dict mapping symbol to List[TickData].
+        initial_capital:             Starting capital.
+        mm_refresh_interval_ns:      Minimum nanoseconds between MM quote refreshes.
+        equity_snapshot_interval_ns: Minimum nanoseconds between equity snapshots.
+    """
+    engine = BacktestEngine(initial_capital)
+
+    for symbol, ticks in tick_data.items():
+        engine.add_tick_data(symbol, ticks)
+
+    engine.set_strategy(strategy)
+    engine.set_mm_refresh_interval(mm_refresh_interval_ns)
+    engine.set_equity_snapshot_interval(equity_snapshot_interval_ns)
+
     final_value = engine.run()
 
     return BacktestResults({
@@ -224,8 +324,12 @@ __version__ = version()
 __all__ = [
     # Enums
     'SignalType', 'Side', 'OrderType',
-    # Data
+    # Bar data
     'BarData', 'CSVDataLoader', 'load_csv_data',
+    # Tick data
+    'TickData', 'TickDataLoader',
+    'load_tick_csv', 'load_tick_parquet', 'aggregate_ticks_to_bars',
+    'TickParquetLoader',
     # Events
     'MarketDataEvent', 'SignalEvent', 'FillEvent',
     # Execution
@@ -233,7 +337,8 @@ __all__ = [
     # Strategy
     'Strategy', 'BuyAndHold', 'SMACrossover', 'MeanReversion', 'PairsTrading',
     # Backtest
-    'BacktestEngine', 'BacktestResults', 'create_backtest', 'run_backtest',
+    'BacktestEngine', 'BacktestResults',
+    'create_backtest', 'run_backtest', 'run_tick_backtest',
     # C++ position sizing (used by BacktestEngine)
     'PositionSizingContext', 'PositionSizer',
     'FixedPercentage', 'RiskBased', 'KellyCriterion',

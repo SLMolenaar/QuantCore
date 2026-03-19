@@ -20,6 +20,7 @@ This document covers everything you can do with QuantCore's Python interface. It
 12. [Parameter Sweeps and Optimization](#12-parameter-sweeps-and-optimization)
 13. [Walk-Forward Analysis](#13-walk-forward-analysis)
 14. [Monte Carlo Validation](#14-monte-carlo-validation)
+15. [Tick Data](#15-tick-data)
 
 ---
 
@@ -55,10 +56,10 @@ bars = qc.CSVDataLoader.load(
 ```python
 from quantcore import load_parquet_data
 
-# Returns List[BarData] — same as load_csv_data
+# Returns List[BarData] - same as load_csv_data
 bars = load_parquet_data('data/aapl.parquet', symbol='AAPL')
 
-# Returns a (N, 6) float64 numpy array — faster path for add_data (see below)
+# Returns a (N, 6) float64 numpy array - faster path for add_data (see below)
 arr = load_parquet_data('data/aapl.parquet', symbol='AAPL', use_numpy=True)
 ```
 
@@ -72,6 +73,48 @@ arr  = ParquetDataLoader.load_numpy('data/aapl.parquet')            # (N, 6) flo
 ```
 
 `load_numpy` returns columns in the order `[timestamp_ns, open, high, low, close, volume]` and is designed for the fast numpy `add_data` overload (see [Running a Backtest](#3-running-a-backtest)).
+
+### Tick data from CSV
+
+`load_tick_csv` loads trade tick data. Accepted column layouts (auto-detected by column count):
+
+```
+3 cols: timestamp, price, quantity
+4 cols: timestamp, price, quantity, side   (B/b/buy/BUY or S/s/sell/SELL)
+5 cols: symbol, timestamp, price, quantity, side
+```
+
+```python
+ticks = qc.load_tick_csv('data/aapl_ticks.csv', 'AAPL')
+```
+
+You can also call `TickDataLoader` directly:
+
+```python
+ticks = qc.TickDataLoader.load('data/aapl_ticks.csv', symbol='AAPL', has_header=True)
+```
+
+### Tick data from Parquet
+
+```python
+from quantcore import load_tick_parquet
+
+# Returns List[TickData]
+ticks = load_tick_parquet('data/aapl_ticks.parquet', symbol='AAPL', use_numpy=False)
+
+# Returns a (N, 4) float64 numpy array: [timestamp_ns, price, quantity, side]
+# side encoding: 0.0 = Buy, 1.0 = Sell - use directly with add_tick_data(symbol, array)
+arr = load_tick_parquet('data/aapl_ticks.parquet', use_numpy=True)
+```
+
+You can also call `TickParquetLoader` directly:
+
+```python
+from quantcore import TickParquetLoader
+
+ticks = TickParquetLoader.load('data/aapl_ticks.parquet', symbol='AAPL')  # List[TickData]
+arr   = TickParquetLoader.load_numpy('data/aapl_ticks.parquet')            # (N, 4) float64 ndarray
+```
 
 ### BarData fields
 
@@ -92,6 +135,29 @@ bar.is_bullish()     # bool, True if close > open
 bar.is_bearish()     # bool, True if close < open
 ```
 
+### TickData fields
+
+```python
+tick.symbol         # str
+tick.timestamp_ns   # int, nanoseconds since epoch
+tick.price          # float
+tick.quantity       # float
+tick.aggressor_side # qc.Side.BUY or qc.Side.SELL
+```
+
+### Aggregating ticks to bars
+
+If your strategy is bar-based, aggregate before running:
+
+```python
+# bar_duration_ns common values:
+#   1_000_000_000      - 1 second
+#   60_000_000_000     - 1 minute
+#   3_600_000_000_000  - 1 hour
+#   86_400_000_000_000 - 1 day
+bars = qc.aggregate_ticks_to_bars(ticks, bar_duration_ns=60_000_000_000)
+```
+
 ### Inspecting loaded data
 
 ```python
@@ -103,14 +169,14 @@ print(f"First bar: {bars[0].symbol} open={bars[0].open} close={bars[0].close}")
 
 ## 2. Writing a Strategy
 
-Subclass `qc.Strategy` and implement `on_data`. Implementing `on_fill` and `on_rejected` is optional.
+Subclass `qc.Strategy` and implement `on_data`. Implementing `on_fill` and `on_rejected` is optional. The same strategy class works for both bar and tick data - `event.close` is the close price for bars and the trade price for ticks.
 
 ```python
 import quantcore as qc
 
 class MyStrategy(qc.Strategy):
     def on_data(self, event: qc.MarketDataEvent):
-        # Called once per bar, per symbol
+        # Called once per bar or tick, per symbol
         pass
 
     def on_fill(self, fill: qc.FillEvent):
@@ -124,7 +190,7 @@ class MyStrategy(qc.Strategy):
 
 ### MarketDataEvent fields
 
-Fields are accessible as both attributes and getter methods — both styles work and are used interchangeably:
+Fields are accessible as both attributes and getter methods - both styles work and are used interchangeably:
 
 ```python
 # Attribute access
@@ -133,7 +199,7 @@ event.timestamp_ns  # int  (nanoseconds since epoch)
 event.open          # float
 event.high          # float
 event.low           # float
-event.close         # float  (use this as "current price")
+event.close         # float  (close price for bars; trade price for ticks)
 event.volume        # float
 
 # Equivalent getter methods
@@ -173,7 +239,7 @@ fill.commission
 
 ### on_rejected
 
-`on_rejected` is called whenever a signal is blocked by the risk manager before an order is placed. The strategy is not notified of rejections by default — override this method if you need to react to them (e.g. log, reduce position targets, or halt trading).
+`on_rejected` is called whenever a signal is blocked by the risk manager before an order is placed. The strategy is not notified of rejections by default - override this method if you need to react to them (e.g. log, reduce position targets, or halt trading).
 
 ```python
 def on_rejected(self, symbol: str, reason: str):
@@ -268,7 +334,7 @@ class ZScoreMeanReversion(qc.Strategy):
         print(f"Filled: {fill.get_side()} {fill.get_quantity()} @ {fill.get_price():.2f}")
 
     def on_rejected(self, symbol, reason):
-        print(f"Rejected: {symbol} — {reason}")
+        print(f"Rejected: {symbol} - {reason}")
 ```
 
 ### Using signal strength
@@ -310,6 +376,20 @@ print(results)
 print(results.metrics)
 ```
 
+### run_tick_backtest (convenience function)
+
+```python
+results = qc.run_tick_backtest(
+    strategy=MyStrategy(),
+    tick_data={'AAPL': ticks},
+    initial_capital=100_000.0,
+    mm_refresh_interval_ns=1_000_000_000,       # refresh MM quotes once per second
+    equity_snapshot_interval_ns=60_000_000_000, # snapshot equity once per minute
+)
+```
+
+The same strategy class works for bar and tick data. `event.close` is the tick price. Both `mm_refresh_interval_ns` and `equity_snapshot_interval_ns` have sensible defaults - see below for what they control.
+
 ### BacktestEngine (direct)
 
 Use this when you need to configure execution, position sizing, or risk limits before running.
@@ -338,7 +418,49 @@ arr = qc.ParquetDataLoader.load_numpy('data/aapl.parquet')  # (N, 6) float64
 engine.add_data('AAPL', arr)
 ```
 
-Note: `timestamp_ns` is stored as `float64` in the array. `float64` has a 53-bit mantissa so timestamps beyond year 2255 lose sub-microsecond precision — fine for current UNIX nanosecond timestamps.
+Note: `timestamp_ns` is stored as `float64` in the array. `float64` has a 53-bit mantissa so timestamps beyond year 2255 lose sub-microsecond precision - fine for current UNIX nanosecond timestamps.
+
+### Tick data
+
+Load tick data with `add_tick_data` instead of `add_data`. Bar and tick series can be mixed across symbols in the same engine.
+
+```python
+engine = qc.BacktestEngine(100_000.0)
+engine.add_tick_data('AAPL', ticks)   # List[TickData]
+engine.add_tick_data('AAPL', arr)     # (N, 4) float64 numpy array
+```
+
+The numpy path for tick data uses a single boundary crossing instead of N individual pybind11 object constructions and is roughly 3–5x faster for large datasets. Column order: `[timestamp_ns, price, quantity, side]` with side encoded as `0.0 = Buy, 1.0 = Sell`.
+
+`add_data` and `add_tick_data` are mutually exclusive per symbol - calling one clears any previously registered data for that symbol.
+
+### Market maker refresh interval
+
+The engine runs a synthetic market maker that refreshes its quotes on every event by default. For dense tick data this dominates cost. Throttle it:
+
+```python
+engine.set_mm_refresh_interval(1_000_000_000)   # refresh at most once per second
+engine.get_mm_refresh_interval()                 # int, nanoseconds (0 = every event)
+```
+
+A 1-second interval gives ~5x speedup on 1-second tick data. `run_tick_backtest()` sets this to 1 second by default.
+
+### Equity snapshot interval
+
+Controls how often the equity curve is snapshotted during a run:
+
+```python
+engine.set_equity_snapshot_interval(60_000_000_000)  # snapshot every minute
+engine.get_equity_snapshot_interval()                 # int, nanoseconds (0 = every event)
+```
+
+In bar mode the snapshot happens once per bar regardless of this setting. In tick mode, setting this to 1 minute keeps the equity curve manageable without any meaningful performance impact - the snapshot itself is cheap. `run_tick_backtest()` sets this to 1 minute by default.
+
+### Checking whether a symbol uses tick data
+
+```python
+engine.has_tick_data('AAPL')  # bool
+```
 
 ### Passing an ExecutionConfig
 
@@ -417,7 +539,7 @@ The engine raises an exception if:
 - `run()` is called without a strategy set
 - `run()` is called without any data loaded
 - `set_strategy(None)` or `set_position_sizer(None)` is called
-- An empty bar series is passed to `add_data`
+- An empty bar or tick series is passed to `add_data` or `add_tick_data`
 - Initial capital is zero or negative
 
 ---
@@ -426,7 +548,7 @@ The engine raises an exception if:
 
 ### BacktestResults object
 
-`run_backtest` returns a `BacktestResults` object directly:
+`run_backtest` and `run_tick_backtest` both return a `BacktestResults` object:
 
 ```python
 results = qc.run_backtest(
@@ -521,7 +643,7 @@ qc.OrderType.GOOD_FOR_DAY        # Canceled at end of session if unfilled
 
 ```python
 ee = engine.get_execution_engine('AAPL')
-# Returns None if the symbol was never loaded via add_data
+# Returns None if the symbol was never loaded via add_data or add_tick_data
 
 ee.get_position()          # float, shares held (negative = short)
 ee.get_average_price()     # float, volume-weighted average entry price
@@ -553,12 +675,12 @@ Each sizer has an internal `max_leverage_` cap that limits the notional value of
 
 ### FixedPercentage
 
-Allocates a fixed fraction of current capital per position. Values above `1.0` imply leverage (e.g. `2.0` = 200% of capital per position) and are valid — the sizer does not cap leverage internally, so `RiskLimits.max_leverage` on the engine acts as the ceiling.
+Allocates a fixed fraction of current capital per position. Values above `1.0` imply leverage (e.g. `2.0` = 200% of capital per position) and are valid - the sizer does not cap leverage internally, so `RiskLimits.max_leverage` on the engine acts as the ceiling.
 
 ```python
 sizer = qc.FixedPercentage(0.10)   # 10% per trade, no leverage
 sizer = qc.FixedPercentage(1.0)    # 100% per trade (1x, single asset)
-sizer = qc.FixedPercentage(2.0)    # 200% per trade — requires matching RiskLimits
+sizer = qc.FixedPercentage(2.0)    # 200% per trade - requires matching RiskLimits
 ```
 
 ### RiskBased
@@ -585,7 +707,7 @@ Sizes using the Kelly formula: `f* = (win_rate * avg_win - (1 - win_rate) * avg_
 sizer = qc.KellyCriterion(win_rate=0.55, avg_win=0.02, avg_loss=0.01)
 ```
 
-Kelly sizing can produce large positions. The sizer defaults to a 1x leverage cap — call `set_max_leverage` to allow leverage above 1x, or use a fractional Kelly to reduce size:
+Kelly sizing can produce large positions. The sizer defaults to a 1x leverage cap - call `set_max_leverage` to allow leverage above 1x, or use a fractional Kelly to reduce size:
 
 ```python
 # Allow up to 2x leverage
@@ -605,7 +727,7 @@ sizer = qc.EqualWeight(num_positions=5)  # 20% per position
 
 ### VolatilityTargeting
 
-Scales leverage to hit a target annualized portfolio volatility. The sizer is uncapped by default — it will scale above 1x if the portfolio volatility is low relative to the target. Use `set_max_leverage()` to impose a ceiling, or rely on `RiskLimits.max_leverage` on the engine.
+Scales leverage to hit a target annualized portfolio volatility. The sizer is uncapped by default - it will scale above 1x if the portfolio volatility is low relative to the target. Use `set_max_leverage()` to impose a ceiling, or rely on `RiskLimits.max_leverage` on the engine.
 
 ```python
 sizer = qc.VolatilityTargeting(target_volatility=0.15)  # Target 15% annualized vol
@@ -660,7 +782,7 @@ All fields are read-write.
 
 ### Python-side utilities: PositionCalculator
 
-`PositionCalculator` is a standalone Python class for pre-trade sizing calculations outside the engine (useful in research notebooks). Methods return a `PositionSizeResult` with `.quantity`, `.notional_value`, `.percent_of_capital`, and `.reasoning` — not a plain float:
+`PositionCalculator` is a standalone Python class for pre-trade sizing calculations outside the engine (useful in research notebooks). Methods return a `PositionSizeResult` with `.quantity`, `.notional_value`, `.percent_of_capital`, and `.reasoning` - not a plain float:
 
 ```python
 from quantcore import PositionCalculator
@@ -782,7 +904,7 @@ risk_mgr.reset()                                 # clear all state
 
 ### Behavior on rejection
 
-A rejected order does not execute. The strategy's `on_rejected(symbol, reason)` method is called so you can react — reduce targets, log, or halt. If you do not override `on_rejected` the rejection is silently discarded.
+A rejected order does not execute. The strategy's `on_rejected(symbol, reason)` method is called so you can react - reduce targets, log, or halt. If you do not override `on_rejected` the rejection is silently discarded.
 
 ---
 
@@ -1018,7 +1140,7 @@ These are available as C++ classes exposed via pybind11.
 
 ### BuyAndHold
 
-Buys on the first bar per symbol, holds until the end. Used as a benchmark.
+Buys on the first bar or tick per symbol, holds until the end. Used as a benchmark.
 
 ```python
 strategy = qc.BuyAndHold()
@@ -1067,13 +1189,13 @@ strategy = qc.PairsTrading(
 currently_trading = strategy.in_trade()  # bool
 ```
 
-Requires both symbols to be loaded via `add_data`.
+Requires both symbols to be loaded via `add_data` or `add_tick_data`.
 
 ---
 
 ## 11. Multi-Asset Backtests
 
-Pass multiple symbols via `add_data`. The engine interleaves their bars in timestamp order automatically.
+Pass multiple symbols via `add_data` or `add_tick_data`. The engine interleaves their events in timestamp order automatically.
 
 ```python
 engine = qc.BacktestEngine(100_000.0)
@@ -1167,9 +1289,9 @@ print(df[['fast_period', 'slow_period', 'sharpe_ratio', 'total_return_pct']].hea
 result.params           # dict, e.g. {'fast_period': 20, 'slow_period': 100}
 result.sharpe_ratio     # float
 result.total_return     # float, DECIMAL format (0.105 = 10.5%)
-result.total_return_pct # float, percentage format (10.5)    — use this for display
+result.total_return_pct # float, percentage format (10.5)    - use this for display
 result.max_drawdown     # float, DECIMAL format (-0.05 = -5%)
-result.max_drawdown_pct # float, percentage format (-5.0)    — use this for display
+result.max_drawdown_pct # float, percentage format (-5.0)    - use this for display
 result.num_trades       # int
 result.final_value      # float
 ```
@@ -1187,7 +1309,7 @@ result.final_value      # float
 
 `n_jobs` controls worker processes. `n_jobs=-1` uses all available cores. Key constraints:
 
-- `strategy_factory` must be **picklable** — pass a class or a module-level function, not a lambda or closure. Lambdas will raise `PicklingError` at runtime.
+- `strategy_factory` must be **picklable** - pass a class or a module-level function, not a lambda or closure. Lambdas will raise `PicklingError` at runtime.
 - On Windows, guard your entry point with `if __name__ == '__main__':`.
 - Process spawn overhead on Windows is ~500 ms per worker. Parallelism only pays off when each combo takes substantially longer than that (e.g. 100-year backtests at ~240 ms each give a clear speedup; 5-year backtests at ~11 ms each do not). On Linux (`fork`-based), the break-even point is much lower.
 
@@ -1221,7 +1343,7 @@ best = max(results_grid, key=results_grid.get)
 print(f"Best: SMA({best[0]}/{best[1]}) Sharpe={results_grid[best]:.2f}")
 ```
 
-The engine is reentrant — `run()` resets all internal state before each run, so the same engine instance can be reused across multiple calls and will always produce identical results:
+The engine is reentrant - `run()` resets all internal state before each run, so the same engine instance can be reused across multiple calls and will always produce identical results:
 
 ```python
 engine = qc.BacktestEngine(100_000.0)
@@ -1393,3 +1515,84 @@ print(f"Worst Drawdown:  {np.min(drawdowns):.2%}")
 ```
 
 `strategy_factory` must be picklable when `n_jobs != 1`. The same rules apply as for `GridSearchOptimizer`: pass a class or module-level function, not a lambda, and guard with `if __name__ == '__main__':` on Windows.
+
+---
+
+## 15. Tick Data
+
+### Loading
+
+```python
+# CSV
+ticks = qc.load_tick_csv('data/aapl_ticks.csv', 'AAPL')
+
+# Parquet - List[TickData]
+ticks = qc.load_tick_parquet('data/aapl_ticks.parquet', symbol='AAPL', use_numpy=False)
+
+# Parquet - (N, 4) numpy array [timestamp_ns, price, quantity, side]
+arr = qc.load_tick_parquet('data/aapl_ticks.parquet', use_numpy=True)
+```
+
+### Running a tick backtest
+
+```python
+results = qc.run_tick_backtest(
+    strategy=MyStrategy(),
+    tick_data={'AAPL': ticks},
+    initial_capital=100_000.0,
+    mm_refresh_interval_ns=1_000_000_000,
+    equity_snapshot_interval_ns=60_000_000_000,
+).compute()
+
+print(results)
+print(results.metrics)
+```
+
+Or use `BacktestEngine` directly for full control:
+
+```python
+engine = qc.BacktestEngine(100_000.0)
+engine.add_tick_data('AAPL', ticks)
+engine.set_strategy(MyStrategy())
+engine.set_mm_refresh_interval(1_000_000_000)
+engine.set_equity_snapshot_interval(60_000_000_000)
+engine.run()
+```
+
+### Aggregating ticks to bars
+
+If your strategy is bar-based, aggregate before running:
+
+```python
+bars    = qc.aggregate_ticks_to_bars(ticks, bar_duration_ns=60_000_000_000)
+results = qc.run_backtest(strategy=MyStrategy(), data={'AAPL': bars}, initial_capital=100_000.0)
+```
+
+### CSV format
+
+```
+timestamp,price,quantity
+1700000000,150.25,100
+1700000001,150.30,50
+
+# with aggressor side
+timestamp,price,quantity,side
+1700000000,150.25,100,buy
+1700000001,150.30,50,sell
+```
+
+Timestamps in seconds, milliseconds, microseconds, or nanoseconds - detected automatically.
+
+### Performance notes
+
+The market maker refresh interval is the main lever. Without throttling the MM refreshes on every tick, which dominates cost at high frequencies:
+
+| MM refresh interval | Ticks/s | vs no throttle |
+|---|---|---|
+| No throttle | 340 K/s | 1.0x |
+| 1s | 1.66 M/s | 4.9x |
+| 10s | 2.78 M/s | 8.2x |
+
+For large datasets use the numpy `add_tick_data` path (3–5x faster than `List[TickData]`). Set `equity_snapshot_interval_ns` to avoid a dense equity curve - the snapshot itself is cheap, but the vector can grow very large on million-tick datasets.
+
+See [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md) for the full tick data benchmark results.

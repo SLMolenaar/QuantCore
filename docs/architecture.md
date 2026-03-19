@@ -63,6 +63,8 @@ The main loop. Owns the event queue, one `ExecutionEngine` per symbol, and one `
 
 The engine is deterministic and reentrant: calling `run()` twice on the same engine produces identical results because internal state is reset at the start of each run.
 
+Bar data and tick data share the same loop. A tick becomes a `MarketDataEvent` with `open == high == low == close == price`, so strategies work unchanged across both data types.
+
 ### OrderBook
 
 `cpp/orderbook/`
@@ -89,7 +91,9 @@ Tracks position and PnL per symbol.
 
 `cpp/backtesting/portfolio.h`
 
-Aggregates positions across all symbols. Maintains the equity curve (one entry per bar), realized and unrealized PnL, and total fees. The equity curve is what the Python analytics module consumes.
+Aggregates positions across all symbols. Maintains the equity curve, realized and unrealized PnL, and total fees. The equity curve is what the Python analytics module consumes.
+
+In bar mode the equity curve has one entry per bar. In tick mode it is sampled at the interval set by `set_equity_snapshot_interval` (default: every tick, which can produce a very dense curve for large tick datasets).
 
 ### RiskManager
 
@@ -131,11 +135,22 @@ All sizers share `apply_constraints()` which enforces `max_position_size`, `min_
 
 Multiple assets are supported: each `add_data(symbol, bars)` call registers an independent series. The engine interleaves events from all series in timestamp order using the priority queue, with no separate merge step.
 
+### Tick data
+
+`TickDataLoader` reads tick CSV files into a `TickSeries` (a `std::vector<TickData>`). `TickParquetLoader` (Python-side) reads `.parquet` files. Each `TickData` holds a symbol, timestamp, price, quantity, and aggressor side.
+
+`add_tick_data(symbol, ticks)` registers a tick series. Bar and tick series can be mixed across symbols in the same engine - each symbol uses whichever type was registered for it.
+
+`TickDataLoader::aggregate_to_bars(ticks, bar_duration_ns)` converts a tick series to OHLCV bars of any duration before passing them to the engine, if a strategy is bar-based.
+
+Two engine settings matter specifically for tick mode:
+
+- `set_mm_refresh_interval(ns)`: minimum nanoseconds between market-maker quote refreshes per symbol. Without throttling the MM refreshes on every tick, which dominates cost at high frequencies. A 1-second interval gives ~5x speedup on 1-second tick data.
+- `set_equity_snapshot_interval(ns)`: minimum nanoseconds between equity curve snapshots. Defaults to every event, which produces a dense curve. Set to e.g. `60_000_000_000` for 1-minute snapshots.
+
 ### Memory
 
-Bar data is loaded into memory upfront. This is a deliberate trade-off: for the scale QuantCore targets (single asset, years of daily bars), the working set is small. A year of daily bars for one asset is ~252 `BarData` structs at ~64 bytes each, under 20 KB. Even 10 years of minute bars for one asset is around 35 MB, well within reason for a research workstation.
-
-Streaming was considered but rejected: the added complexity in the event loop (backpressure, async loading, seek operations) is not justified at this scale. If tick-level data for large universes becomes a use case, the natural extension is a `StreamingDataLoader` that pages data in chunks and flushes the event queue between pages.
+Data is loaded into memory upfront. For the scale QuantCore targets this is a deliberate trade-off: a year of daily bars is under 20 KB; 10 years of minute bars for one asset is around 35 MB. Tick data is denser - a day of 1-second ticks for one symbol is ~27 KB, a year is ~10 MB - still well within reason for a research workstation.
 
 ---
 
@@ -145,7 +160,9 @@ Streaming was considered but rejected: the added complexity in the event loop (b
 
 Strategy subclassing works through pybind11's trampoline pattern: the C++ `Strategy` base declares `on_data` and `on_fill` as virtual, and the trampoline class forwards calls from C++ into the Python subclass. This means a Python `on_data` method is called from within the C++ event loop with essentially no marshaling overhead for the event itself.
 
-The `run_backtest()` convenience function in `python/quantcore/__init__.py` is a thin Python wrapper that constructs a `BacktestEngine`, loads data, attaches the strategy, calls `engine.run()`, and returns a `BacktestResults` object.
+Both `add_data` and `add_tick_data` accept either their respective object lists (`List[BarData]`, `List[TickData]`) or numpy arrays (`(N, 6)` and `(N, 4)` float64 respectively). The numpy path uses a single boundary crossing instead of N individual pybind11 object constructions, giving a 3–5x speedup for large datasets.
+
+The `run_backtest()` and `run_tick_backtest()` convenience functions in `python/quantcore/__init__.py` are thin Python wrappers that construct a `BacktestEngine`, load data, attach the strategy, call `engine.run()`, and return a `BacktestResults` object.
 
 ---
 
@@ -155,7 +172,7 @@ The `run_backtest()` convenience function in `python/quantcore/__init__.py` is a
 
 Strategies call `generate_signal(symbol, SignalType, strength, timestamp)`. They do not construct orders. The engine converts signals to orders using the configured `PositionSizer` and `ExecutionConfig`.
 
-This keeps strategies clean (they express intent, not execution mechanics) and makes it trivial to swap position sizing methods without touching strategy code.
+This keeps strategies clean (they express intent, not execution mechanics) and makes it trivial to swap position sizing methods without touching strategy code. It also means the same strategy class works for both bar and tick data without modification.
 
 ### Single-threaded event loop
 
@@ -177,6 +194,10 @@ Rather than a simplified fill model (fill at close price ± slippage), QuantCore
 
 The order book is the same codebase as [orderbook-simulator-cpp](https://github.com/SLMolenaar/orderbook-simulator-cpp), which has been independently validated and benchmarked.
 
+### Market maker throttling for tick data
+
+The synthetic market maker that provides liquidity refreshes its quotes by cancelling all resting orders and re-quoting on every call. For bar data this happens once per bar, which is cheap. For tick data at high frequencies this can dominate total engine cost. The `mm_refresh_interval_ns` setting throttles the refresh rate; `run_tick_backtest()` sets it to 1 second by default.
+
 ---
 
 ## File Map
@@ -186,17 +207,20 @@ cpp/
 ├── backtesting/
 │   ├── event.h                  Event base class and EventType enum
 │   ├── event_queue.h            Priority queue over EventPtr
-│   ├── market_data_event.h      OHLCV bar event
+│   ├── market_data_event.h      OHLCV bar event (also used for ticks)
 │   ├── signal_event.h           Strategy signal (BUY / SELL / HOLD)
 │   ├── order_event.h            Order command sent to execution engine
 │   ├── fill_event.h             Execution confirmation
-│   ├── backtest_engine.h/.cpp   Main loop and orchestration
-│   ├── execution_engine.h/.cpp  Latency, slippage, fees, position tracking
-│   ├── portfolio.h/.cpp         Multi-asset aggregation, equity curve
+│   ├── bar_data.h               BarData struct and BarSeries typedef
+│   ├── tick_data.h              TickData struct and TickSeries typedef
+│   ├── tick_data_loader.h       CSV loader and aggregate_to_bars
+│   ├── data_loader.h            CSV loader for bar data
+│   ├── backtest_engine.h        Main loop and orchestration
+│   ├── market_maker.h           Synthetic liquidity provider
 │   ├── position_sizer.h         Sizing implementations
-│   ├── risk_manager.h/.cpp      Pre-trade checks
-│   ├── strategy.h               Abstract base with trampoline for pybind11
-│   └── csv_data_loader.h/.cpp   Bar data ingestion
+│   ├── risk_manager.h           Pre-trade checks
+│   ├── portfolio_context.h      Multi-asset portfolio state
+│   └── strategy.h               Abstract base with trampoline for pybind11
 ├── orderbook/                   Limit order book (price-time priority)
 ├── strategies/
 │   ├── buy_and_hold.h
@@ -208,15 +232,20 @@ cpp/
 python/
 ├── bindings.cpp                 pybind11 module definition
 ├── quantcore/
-│   ├── __init__.py              Public API and run_backtest()
+│   ├── __init__.py              Public API, run_backtest(), run_tick_backtest()
 │   ├── analytics.py             Metrics and rolling calculations
 │   ├── plotting.py              Matplotlib visualizations
 │   ├── position_sizing.py       Python-side sizing utilities
-│   └── parquet_loader.py        Parquet ingestion via pandas
-└── tests/                       pytest suite
+│   ├── parquet_loader.py        Parquet ingestion for bar data
+│   └── tick_parquet_loader.py   Parquet ingestion for tick data
+└── build_module.py              Build helper
 
 benchmarks/
-└── bench_backtest_engine.cpp    Throughput, latency, memory, target verification
+├── bench_backtest_engine.cpp    Bar data: throughput, latency, memory, targets
+├── bench_tick_data.cpp          Tick data: throughput, MM throttle, aggregation
+├── bench_python.py              Python layer: bar data benchmarks
+├── bench_tick_python.py         Python layer: tick data benchmarks
+└── RESULTS.md                   Measured results
 
 examples/
 ├── mean_reversion.ipynb

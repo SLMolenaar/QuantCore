@@ -38,6 +38,8 @@ add_executable(QuantCore ${CPP_SOURCES}
         cpp/backtesting/order_event.h
         cpp/backtesting/fill_event.h
         cpp/backtesting/bar_data.h
+        cpp/backtesting/tick_data.h
+        cpp/backtesting/tick_data_loader.h
         cpp/backtesting/data_loader.h
         cpp/backtesting/strategy.h
         cpp/backtesting/backtest_engine.h
@@ -93,6 +95,20 @@ if(BUILD_BENCHMARKS)
     )
 
     target_compile_options(bench_backtest_engine PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>:/O2>
+            $<$<CXX_COMPILER_ID:MSVC>:/DNDEBUG>
+            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O3>
+            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-DNDEBUG>
+    )
+
+    add_executable(bench_tick_data benchmarks/bench_tick_data.cpp)
+
+    target_include_directories(bench_tick_data PRIVATE
+            ${PROJECT_SOURCE_DIR}/cpp
+            ${PROJECT_SOURCE_DIR}/cpp/orderbook
+    )
+
+    target_compile_options(bench_tick_data PRIVATE
             $<$<CXX_COMPILER_ID:MSVC>:/O2>
             $<$<CXX_COMPILER_ID:MSVC>:/DNDEBUG>
             $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O3>
