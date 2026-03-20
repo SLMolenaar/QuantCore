@@ -254,13 +254,14 @@ def calculate_max_drawdown(
     Args:
         equity_curve: Portfolio value series.
         timestamps:   Corresponding nanosecond UNIX timestamps. When provided,
-                      the duration is returned in calendar days. When omitted
-                      the duration is returned as -1 (indeterminate), because
-                      counting equity snapshots is misleading for tick/minute
-                      data where most snapshots show no change.
+                      the duration is returned in calendar days. When omitted,
+                      the duration is returned as a snapshot count
+                      (recovery_idx - peak_idx), which equals the number of
+                      bars for daily data but is misleading for tick/minute data
+                      where most snapshots show no change.
 
     Returns:
-        (max_drawdown_pct, duration_in_calendar_days_or_minus_one)
+        (max_drawdown_pct, duration_in_calendar_days_or_snapshot_count)
     """
     if len(equity_curve) < 2:
         return 0.0, 0
@@ -274,8 +275,10 @@ def calculate_max_drawdown(
     # peak is the last all-time high before the trough
     peak_idx = int(np.argmax(equity_curve[: trough_idx + 1]))
 
-    # look for full recovery after the trough
-    recovery_idx = len(equity_curve) - 1  # default: no recovery by end of data
+    # look for full recovery after the trough.
+    # defaults to trough_idx (no recovery) so that snapshot-count duration
+    # equals trough, peak when timestamps are not provided.
+    recovery_idx = trough_idx
     for i in range(trough_idx, len(equity_curve)):
         if equity_curve[i] >= equity_curve[peak_idx]:
             recovery_idx = i
@@ -287,8 +290,8 @@ def calculate_max_drawdown(
         duration = int((timestamps[recovery_idx] - timestamps[peak_idx]) / ns_per_day)
         duration = max(0, duration)
     else:
-        # No timestamps: return sentinel so callers know the value is not in days.
-        duration = -1
+        # No timestamps: fall back to snapshot count (recovery_idx - peak_idx).
+        duration = recovery_idx - peak_idx
 
     return max_dd, duration
 
