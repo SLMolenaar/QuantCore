@@ -233,16 +233,17 @@ def plot_rolling_metrics(
     When `window` is 0 (default) it is inferred from `timestamps` to span
     ~14 calendar days. NaN values (flat-equity windows) render as gaps.
     """
-    from .analytics import rolling_sharpe, rolling_volatility
+    from .analytics import rolling_sharpe, rolling_volatility, infer_periods_per_year
 
     effective_window = window if window > 0 else _infer_rolling_window(
         returns, timestamps, target_calendar_days=14
     )
+    ppy = infer_periods_per_year(timestamps) if timestamps is not None else 252
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
 
-    roll_sharpe_vals = rolling_sharpe(returns, effective_window)
-    roll_vol_vals    = rolling_volatility(returns, effective_window)
+    roll_sharpe_vals = rolling_sharpe(returns, effective_window, ppy)
+    roll_vol_vals    = rolling_volatility(returns, effective_window, ppy)
     x                = _rolling_x(timestamps, len(returns), effective_window)
 
     ax1.plot(x, roll_sharpe_vals, linewidth=1.5, color='#2E86AB')
@@ -348,12 +349,13 @@ def plot_full_tearsheet(
         figsize: Tuple[int, int] = (16, 12)
 ) -> plt.Figure:
     """Combined view of all key metrics in one figure."""
-    from .analytics import rolling_sharpe, rolling_volatility
+    from .analytics import rolling_sharpe, rolling_volatility, infer_periods_per_year
 
     fig = plt.figure(figsize=figsize)
     gs  = GridSpec(3, 2, figure=fig, hspace=0.4, wspace=0.3)
 
     roll_window = _infer_rolling_window(returns, timestamps, target_calendar_days=14)
+    ppy         = infer_periods_per_year(timestamps) if timestamps is not None else 252
 
     x_eq      = _equity_x(timestamps, len(equity_curve))
     x_rolling = _rolling_x(timestamps, len(returns), roll_window)
@@ -419,7 +421,7 @@ def plot_full_tearsheet(
 
     # ---- rolling Sharpe ----
     ax4 = fig.add_subplot(gs[2, 0])
-    roll_sharpe_vals = rolling_sharpe(returns, roll_window)
+    roll_sharpe_vals = rolling_sharpe(returns, roll_window, ppy)
     ax4.plot(x_rolling, roll_sharpe_vals, linewidth=1.5, color='#2E86AB')
     ax4.axhline(y=0, color='red',   linestyle='--', linewidth=1, alpha=0.5)
     ax4.axhline(y=1, color='green', linestyle='--', linewidth=1, alpha=0.5)
@@ -431,7 +433,7 @@ def plot_full_tearsheet(
 
     # ---- rolling volatility ----
     ax5 = fig.add_subplot(gs[2, 1])
-    roll_vol_vals = rolling_volatility(returns, roll_window)
+    roll_vol_vals = rolling_volatility(returns, roll_window, ppy)
     ax5.plot(x_rolling, roll_vol_vals, linewidth=1.5, color='#A23B72')
     ax5.set_title(f"Rolling Volatility ({roll_window}-period)", fontsize=13, fontweight='bold')
     ax5.set_ylabel("Volatility (%)", fontsize=10)

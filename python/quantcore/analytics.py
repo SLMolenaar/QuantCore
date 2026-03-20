@@ -16,6 +16,40 @@ from dataclasses import dataclass
 MAX_RATIO_VALUE = 99.99
 
 
+def infer_periods_per_year(timestamps: np.ndarray) -> int:
+    """
+    Estimate the number of equity snapshots per year from a timestamp array.
+
+    Measures the median inter-snapshot interval and divides one year (in
+    nanoseconds) by it. The result is rounded to the nearest integer and
+    clamped to [1, 525_960] (1 per year to 1 per minute).
+
+    Common outputs:
+      ~252        daily bars
+      ~1_260      weekly bars (but these would read as ~252*5)
+      ~362_880    1-minute snapshots  (252 * 1440)
+      ~525_960    1-second snapshots  (252 * 24 * 60 * 60 / ~1.16)
+
+    Falls back to 252 when fewer than 2 timestamps are provided or the
+    median gap is zero.
+    """
+    if timestamps is None or len(timestamps) < 2:
+        return 252
+
+    gaps = np.diff(timestamps.astype(np.int64))
+    positive_gaps = gaps[gaps > 0]
+    if len(positive_gaps) == 0:
+        return 252
+
+    median_gap_ns  = float(np.median(positive_gaps))
+    if median_gap_ns <= 0:
+        return 252
+
+    ns_per_year    = 365.25 * 24 * 3600 * 1_000_000_000
+    periods        = ns_per_year / median_gap_ns
+    return int(np.clip(round(periods), 1, 525_960))
+
+
 @dataclass
 class PerformanceMetrics:
     """Container for backtest metrics"""
@@ -327,7 +361,7 @@ def calculate_all_metrics(
         trade_pnls: Optional[List[float]] = None,
         timestamps: Optional[np.ndarray] = None,
         risk_free_rate: float = 0.0,
-        periods_per_year: int = 252
+        periods_per_year: Optional[int] = None,
 ) -> PerformanceMetrics:
     """
     Calculate all performance metrics from an equity curve.
@@ -336,13 +370,20 @@ def calculate_all_metrics(
         equity_curve:     Portfolio value series.
         trade_pnls:       Per-trade PnL list for trade-level metrics.
         timestamps:       Nanosecond UNIX timestamps aligned with equity_curve.
-                          Required for a meaningful max_drawdown_duration. When
-                          omitted, max_drawdown_duration is set to -1.
+                          Used for max_drawdown_duration (calendar days) and,
+                          when periods_per_year is None, to auto-infer the
+                          correct annualisation factor.
         risk_free_rate:   Annual risk-free rate (e.g. 0.02 = 2%).
-        periods_per_year: Number of equity snapshots per year (252 for daily,
-                          252 * 390 for minute-level, etc.). Affects annualised
-                          return and ratio calculations.
+        periods_per_year: Snapshots per year for annualisation. When None
+                          (default), inferred from timestamps if provided,
+                          otherwise falls back to 252. Pass an explicit value
+                          to override (e.g. 252 for daily, 252*1440 for
+                          1-minute snapshots).
     """
+    if periods_per_year is None:
+        periods_per_year = infer_periods_per_year(timestamps) \
+            if timestamps is not None else 252
+
     returns = calculate_returns(equity_curve)
 
     # return metrics
@@ -386,7 +427,7 @@ def calculate_all_metrics(
 def rolling_sharpe(
         returns: np.ndarray,
         window: int = 60,
-        periods_per_year: int = 252
+        periods_per_year: int = 252,
 ) -> np.ndarray:
     """
     Rolling Sharpe ratio.
@@ -438,7 +479,7 @@ def rolling_sharpe(
 def rolling_volatility(
         returns: np.ndarray,
         window: int = 60,
-        periods_per_year: int = 252
+        periods_per_year: int = 252,
 ) -> np.ndarray:
     """
     Rolling annualized volatility (%).
