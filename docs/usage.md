@@ -919,12 +919,13 @@ import numpy as np
 from quantcore.analytics import (
     calculate_returns,
     calculate_all_metrics,
+    infer_periods_per_year,
     rolling_sharpe,
     rolling_volatility,
     monthly_returns,
     underwater_plot_data,
 )
-
+ 
 equity     = np.array(engine.get_equity_curve())
 timestamps = np.array(engine.get_timestamps())
 returns    = calculate_returns(equity)
@@ -940,30 +941,60 @@ returns = calculate_returns(equity)
 # returns[i] = (equity[i+1] - equity[i]) / equity[i]
 ```
 
-### calculate_all_metrics
+### infer_periods_per_year
 
-Returns a `PerformanceMetrics` dataclass with all metrics populated. Printing it gives a formatted summary:
+Estimates the number of equity snapshots per year from a timestamp array.
+Measures the median inter-snapshot interval and divides one calendar year by it.
+Useful when you need the correct annualisation factor for a custom calculation:
 
 ```python
-metrics = calculate_all_metrics(equity)
+ppy = infer_periods_per_year(timestamps)
+# ~526_000 for 1-minute crypto snapshots (365.25 * 1440)
+# ~365     for daily bars
+# 252      fallback when fewer than 2 timestamps are provided
+```
+
+### calculate_all_metrics
+
+Returns a `PerformanceMetrics` dataclass. Printing it gives a formatted summary:
+
+```python
+# Recommended: pass timestamps so that max_drawdown_duration is reported in
+# calendar days and periods_per_year is inferred automatically.
+metrics = calculate_all_metrics(equity, trade_pnls=trade_pnls, timestamps=timestamps)
 print(metrics)
-# Total Return:     24.31%
-# Annualized:       11.82%
-# Sharpe Ratio:     1.43
-# Sortino Ratio:    2.01
-# Calmar Ratio:     1.35
-# Max Drawdown:     -8.74%
+# Total Return:          1.32%
+# Annualized Return:     5.89%
+# Sharpe Ratio:          4.39
+# Sortino Ratio:         0.70
+# Max Drawdown:         -0.42%
+# Max DD Duration:      35 days
 # ...
 ```
 
-To include trade-level metrics, pass a list of per-trade PnL values:
+**Signature:**
 
 ```python
-metrics = calculate_all_metrics(equity, trade_pnls=engine.get_trade_pnls())
-print(metrics.total_trades)   # int
-print(metrics.win_rate)       # float, 0–100
-print(metrics.profit_factor)  # float
+calculate_all_metrics(
+    equity_curve,
+    trade_pnls=None,       # List[float], per-trade PnL for trade-level metrics
+    timestamps=None,       # np.ndarray of int64 nanosecond timestamps
+    risk_free_rate=0.0,    # annual rate, e.g. 0.02 = 2%
+    periods_per_year=None, # int or None; when None, auto-inferred from timestamps
+)                          # falls back to 252 when no timestamps provided
 ```
+
+**`periods_per_year` auto-inference:** when `None` (the default) and `timestamps` are
+provided, `infer_periods_per_year` is called automatically. This means annualised
+return, Sharpe, Sortino, volatility, and Calmar are all correctly scaled regardless
+of whether you are running on daily bars, minute-level tick data, or anything else.
+Pass an explicit integer to override (e.g. `periods_per_year=252` to force the
+daily-bars convention regardless of actual data density).
+
+**`max_drawdown_duration`:** when `timestamps` are provided this field is the
+calendar-day span from the equity peak to recovery (or end of data). When
+`timestamps` are not provided it is `-1`, and `PerformanceMetrics.__str__` prints
+`"n/a (no timestamps)"` rather than a misleading snapshot count.
 
 ### Individual metric functions
 
@@ -978,29 +1009,37 @@ from quantcore.analytics import (
     calculate_calmar_ratio,
     analyze_trades,
 )
-
+ 
 total_return = calculate_total_return(equity)                              # float, %
 ann_ret      = calculate_annualized_return(equity, periods_per_year=252)  # float, %
 sharpe       = calculate_sharpe_ratio(returns)                            # float
 sortino      = calculate_sortino_ratio(returns)                           # float
 vol          = calculate_volatility(returns, periods_per_year=252)        # float, %
-max_dd, dur  = calculate_max_drawdown(equity)                             # (float %, int bars)
+ 
+# timestamps is optional; when provided, duration is calendar days.
+# When omitted, duration is -1 (indeterminate).
+max_dd, dur  = calculate_max_drawdown(equity, timestamps=timestamps)      # (float %, int)
+ 
 calmar       = calculate_calmar_ratio(ann_ret, max_dd)                    # float
-
+ 
 trade_stats  = analyze_trades([100.0, -50.0, 200.0, -30.0, 80.0])
 # dict with keys: total_trades, win_rate, profit_factor,
 #                 avg_win, avg_loss, largest_win, largest_loss
 ```
 
-`analyze_trades([])` returns a dict with `total_trades == 0` and safe zero values for all other keys.
-
 ### Rolling metrics
 
 ```python
-roll_sharpe = rolling_sharpe(returns, window=60, periods_per_year=252)
+# periods_per_year defaults to 252.
+# For tick/minute data pass the correct value or use infer_periods_per_year:
+ppy = infer_periods_per_year(timestamps)
+ 
+roll_sharpe = rolling_sharpe(returns, window=60, periods_per_year=ppy)
 # np.ndarray of length len(returns) - window + 1
-
-roll_vol = rolling_volatility(returns, window=60, periods_per_year=252)
+# NaN where the rolling window is entirely flat (std == 0) — renders as a
+# gap in charts rather than a misleading spike.
+ 
+roll_vol = rolling_volatility(returns, window=60, periods_per_year=ppy)
 # np.ndarray, annualized volatility in %
 ```
 
@@ -1021,7 +1060,7 @@ dd = underwater_plot_data(equity)
 # np.ndarray, same length as equity
 # values are drawdown % from running peak, always <= 0
 ```
-
+ 
 ---
 
 ## 9. Visualizations
@@ -1064,7 +1103,10 @@ fig = plot_underwater(equity, timestamps=timestamps)
 
 ### plot_returns_distribution
 
-Histogram of period returns with mean line and Q-Q plot:
+Histogram of returns with Q-Q plot. Zero-return periods (flat equity between
+trades) are automatically excluded — common with tick/minute data where most
+snapshots show no change because there is no open position. The excluded
+fraction is noted in an annotation when it exceeds 5%:
 
 ```python
 fig = plot_returns_distribution(returns, title="Return Distribution")
@@ -1072,16 +1114,27 @@ fig = plot_returns_distribution(returns, title="Return Distribution")
 
 ### plot_rolling_metrics
 
-Two-panel chart: rolling Sharpe (top) and rolling volatility (bottom):
+Two-panel chart: rolling Sharpe (top) and rolling volatility (bottom).
+
+The `window` parameter is in **periods**, not calendar days. When `window=0`
+(the default), it is inferred automatically from `timestamps` to span
+approximately 14 calendar days, which stays meaningful across daily, minute,
+and tick data. `periods_per_year` is also inferred from `timestamps` when
+provided, so the Sharpe and volatility scales are correctly annualised:
 
 ```python
 fig = plot_rolling_metrics(
     returns,
-    timestamps=timestamps,
-    window=60,
+    timestamps=timestamps,  # required for auto window + correct annualisation
+    window=0,               # 0 = auto-infer from timestamps (~14 calendar days)
     title="Rolling Metrics"
 )
 ```
+
+NaN values from flat-equity windows render as gaps in the line rather than
+spikes. This replaces the previous behaviour where windows with fewer than
+10% non-zero returns were blanked entirely, which suppressed all output for
+low-frequency strategies.
 
 ### plot_monthly_returns_heatmap
 
@@ -1089,7 +1142,7 @@ Requires a monthly returns DataFrame from `analytics.monthly_returns`:
 
 ```python
 from quantcore.analytics import monthly_returns
-
+ 
 monthly = monthly_returns(equity, timestamps)
 fig = plot_monthly_returns_heatmap(monthly)
 ```
@@ -1101,17 +1154,19 @@ Scatter plot of individual trade returns plus cumulative:
 ```python
 entry_prices = [100.0, 105.0, 110.0]
 exit_prices  = [103.0, 102.0, 115.0]
-
+ 
 fig = plot_trade_analysis(entry_prices, exit_prices)
 ```
 
 ### plot_full_tearsheet
 
-All charts in one figure (equity curve, drawdown, returns distribution, rolling Sharpe, rolling volatility):
+All charts in one figure (equity curve, drawdown, returns distribution,
+rolling Sharpe, rolling volatility). Rolling window and annualisation factor
+are both auto-inferred from `timestamps`:
 
 ```python
 import matplotlib.pyplot as plt
-
+ 
 fig = plot_full_tearsheet(equity, returns, timestamps=timestamps)
 plt.show(block=True)
 ```
