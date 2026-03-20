@@ -291,6 +291,7 @@ class BacktestResults:
         self._metrics = calculate_all_metrics(
             np.array(self.equity_curve),
             trade_pnls=self.trade_pnls if self.trade_pnls else None,
+            timestamps=np.array(self.timestamps, dtype=np.int64) if self.timestamps else None,
         )
         return self
 
