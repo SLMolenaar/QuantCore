@@ -73,6 +73,7 @@ version = _core.version
 from .position_sizing import PositionCalculator, PortfolioPositionSizer
 from .parquet_loader import ParquetDataLoader
 from .tick_parquet_loader import TickParquetLoader
+from .corporate_actions import CorporateActionsAdjuster, SplitEvent, DividendEvent
 
 
 def load_parquet_data(
@@ -353,4 +354,5 @@ __all__ = [
     # Utilities
     'hello', 'version',
     'ParquetDataLoader', 'load_parquet_data',
+    'CorporateActionsAdjuster', 'SplitEvent', 'DividendEvent',
 ]

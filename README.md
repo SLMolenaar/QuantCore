@@ -174,6 +174,31 @@ arr = qc.load_tick_parquet('data/aapl_ticks.parquet', use_numpy=True)
 engine.add_tick_data('AAPL', arr)
 ```
 
+## Data Normalization
+
+QuantCore does not adjust raw prices for corporate actions internally.
+Feed it **adjusted data**, where close prices are continuous across splits
+and dividends, for correct results.
+
+Most data vendors offer adjusted data:
+- Yahoo Finance: use `Adj Close` instead of `Close`
+- Polygon.io: use the `adjusted=true` parameter
+- CRSP: adjusted by default
+- Quandl/NASDAQ Data Link: `WIKI/PRICES` table uses adjusted prices
+
+If you have raw unadjusted data, use `CorporateActionsAdjuster`:
+```python
+from quantcore import CorporateActionsAdjuster
+
+adjuster = CorporateActionsAdjuster.from_csv(
+    splits_csv='data/aapl_splits.csv',
+    dividends_csv='data/aapl_dividends.csv',
+)
+raw_bars    = qc.load_csv_data('data/aapl_raw.csv', 'AAPL')
+adj_bars    = adjuster.adjust(raw_bars)
+results     = qc.run_backtest(strategy=MyStrategy(), data={'AAPL': adj_bars}, ...)
+```
+
 ### Aggregation
 
 ```python

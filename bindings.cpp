@@ -483,6 +483,8 @@ PYBIND11_MODULE(_core, m) {
              py::arg("symbol"), py::arg("side"), py::arg("quantity"), py::arg("price"))
         .def("reset",                 &RiskManager::reset)
         .def("get_all_positions",     &RiskManager::get_all_positions)
+        .def("update_position", &RiskManager::update_position,
+             py::arg("symbol"), py::arg("side"), py::arg("quantity"))
         .def("calculate_total_exposure", static_cast<double(RiskManager::*)() const>(
              &RiskManager::calculate_total_exposure));
 

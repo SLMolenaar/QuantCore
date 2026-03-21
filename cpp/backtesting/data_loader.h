@@ -42,7 +42,7 @@ namespace quantcore {
                 line_nr++;
                 if (line.empty()) continue;
 
-                data_lines++;  // Count this as a data line
+                data_lines++;
 
                 try {
                     auto bar = parse_line(line, symbol);
@@ -55,7 +55,7 @@ namespace quantcore {
                 }
             }
 
-            // Check if too many lines were skipped, if more than 20% of lines are bad the file is probably corrupted
+            // Check if too many lines were skipped
             double skip_pct = (data_lines > 0)
                 ? static_cast<double>(bad_lines) / data_lines
                 : 0.0;
