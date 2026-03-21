@@ -1,5 +1,6 @@
 # QuantCore
 
+![PyPI](https://img.shields.io/pypi/v/quantcore)
 ![Build](https://github.com/SLMolenaar/quantcore/actions/workflows/coverage.yml/badge.svg)
 ![Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)
 ![C++](https://img.shields.io/badge/C%2B%2B-20-blue)
