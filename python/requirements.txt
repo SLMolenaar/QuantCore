@@ -4,3 +4,4 @@ pandas>=2.0.0
 matplotlib>=3.7.0
 scipy
 pyarrow
+pandas_market_calendars>=4.0

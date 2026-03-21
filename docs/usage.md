@@ -51,16 +51,27 @@ bars = qc.CSVDataLoader.load(
 
 `max_skip_pct` defaults to `0.20`. Set it lower to enforce stricter data quality.
 
+To filter out weekends and exchange holidays before the data reaches the engine, pass a `calendar` argument:
+
+```python
+bars = qc.load_csv_data('data/aapl.csv', 'AAPL', calendar='NYSE')
+```
+
+See [Trading Calendar](#16-trading-calendar) for details.
+
 ### From Parquet
 
 ```python
 from quantcore import load_parquet_data
 
 # Returns List[BarData] - same as load_csv_data
-bars = load_parquet_data('data/aapl.parquet', symbol='AAPL')
+bars = load_parquet_data('data/aapl.parquet', symbol='AAPL', use_numpy=False)
 
 # Returns a (N, 6) float64 numpy array - faster path for add_data (see below)
 arr = load_parquet_data('data/aapl.parquet', symbol='AAPL', use_numpy=True)
+
+# Filter to trading days before returning (forces use_numpy=False internally)
+bars = load_parquet_data('data/aapl.parquet', symbol='AAPL', calendar='NYSE')
 ```
 
 The Parquet loader accepts any column naming convention that maps to the five required fields. It handles `datetime64` index columns and integer epoch columns in all common units. You can also call `ParquetDataLoader` directly:
@@ -400,6 +411,19 @@ results = qc.run_backtest(
 print(results)
 print(results.metrics)
 ```
+
+To filter weekends and exchange holidays before running, pass a `calendar` argument. The same calendar is applied to every symbol in `data`:
+
+```python
+results = qc.run_backtest(
+    strategy=MyStrategy(),
+    data={'AAPL': bars_aapl, 'MSFT': bars_msft},
+    initial_capital=100_000.0,
+    calendar='NYSE',
+)
+```
+
+See [Trading Calendar](#16-trading-calendar) for supported exchanges and behaviour.
 
 ### run_tick_backtest (convenience function)
 
@@ -1676,3 +1700,74 @@ The market maker refresh interval is the main lever. Without throttling the MM r
 For large datasets use the numpy `add_tick_data` path (3–5x faster than `List[TickData]`). Set `equity_snapshot_interval_ns` to avoid a dense equity curve - the snapshot itself is cheap, but the vector can grow very large on million-tick datasets.
 
 See [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md) for the full tick data benchmark results.
+
+---
+
+## 16. Trading Calendar
+
+Without a trading calendar, the engine processes every bar in the series regardless of date. If your data contains bars dated on weekends, exchange holidays, or other non-trading days — common with synthetic data, research databases, or anything you have assembled manually — those bars generate signals and simulate fills against a market maker that will always fill. For daily strategies this inflates performance by roughly 10–14 extra trading days per year.
+
+The `TradingCalendar` class filters a bar series to remove non-trading days before the data reaches the engine. It is backed by `pandas_market_calendars`, which covers 50+ exchanges including NYSE, NASDAQ, LSE, TSX, EUREX, and ASX, and handles the edge cases you would otherwise have to hardcode: Good Friday (calculated from Easter), Juneteenth (added to NYSE in 2022), observed holidays (e.g. when Christmas falls on a Sunday), and ad hoc closures.
+
+Requires: `pip install pandas_market_calendars`
+
+### Usage
+
+**At load time** — the simplest option:
+
+```python
+bars = qc.load_csv_data('data/aapl.csv', 'AAPL', calendar='NYSE')
+bars = qc.load_parquet_data('data/aapl.parquet', 'AAPL', calendar='NYSE')
+```
+
+**At run time** — applies the same calendar to every symbol in the backtest:
+
+```python
+results = qc.run_backtest(
+    strategy=MyStrategy(),
+    data={'AAPL': bars_aapl, 'MSFT': bars_msft},
+    initial_capital=100_000.0,
+    calendar='NYSE',
+)
+```
+
+**Explicitly** — when you need more control:
+
+```python
+cal  = qc.TradingCalendar('NYSE')
+bars = cal.filter_bars(qc.load_csv_data('data/aapl.csv', 'AAPL'))
+```
+
+The `calendar` parameter is not available on `run_tick_backtest`. Tick data loaded from an exchange feed already contains only actual trades — filtering by calendar would be wrong for crypto and other markets that trade on holidays.
+
+### filter_bars parameters
+
+```python
+cal.filter_bars(
+    bars,
+    strict=False,        # when True, raises if more than max_skip_pct bars are removed
+    max_skip_pct=0.20,   # threshold for strict mode (default 20%)
+)
+```
+
+In the default mode (`strict=False`), removed bars emit a `UserWarning` showing how many were dropped and why. In strict mode, a `RuntimeError` is raised if the removed fraction exceeds `max_skip_pct`. Either way, if every bar in the series falls on a non-trading day, `filter_bars` raises `RuntimeError` — an empty series would crash the engine silently.
+
+### is_trading_day
+
+```python
+cal = qc.TradingCalendar('NYSE')
+cal.is_trading_day(timestamp_ns)  # bool
+```
+
+### Available exchanges
+
+```python
+qc.TradingCalendar.available_calendars()
+# ['ASX', 'BMF', 'CFE', 'CME', 'EUREX', 'LSE', 'NASDAQ', 'NYSE', 'TSX', ...]
+```
+
+### When to use it
+
+Use the calendar whenever your data comes from a source that does not already guarantee trading-day-only bars. Yahoo Finance daily data, CRSP, and most vendor feeds are clean. Synthetic data, hand-assembled CSVs, and data resampled from intraday sources without a session filter often are not.
+
+Tick data does not need calendar filtering. A tick is a real trade — if there is a tick, the market was open.

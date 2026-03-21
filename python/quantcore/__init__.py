@@ -74,13 +74,15 @@ from .position_sizing import PositionCalculator, PortfolioPositionSizer
 from .parquet_loader import ParquetDataLoader
 from .tick_parquet_loader import TickParquetLoader
 from .corporate_actions import CorporateActionsAdjuster, SplitEvent, DividendEvent
+from .calendar import TradingCalendar
 
 
 def load_parquet_data(
         filepath: str,
         symbol: str = "",
         use_numpy: bool = True,
-) -> List[BarData]:
+        calendar: Optional[str] = None,
+):
     """
     Load OHLCV data from a Parquet file.
 
@@ -95,23 +97,47 @@ def load_parquet_data(
                    returns a numpy (N, 6) array suitable for
                    BacktestEngine.add_data(symbol, array).
                    When False, returns List[BarData] (same as load_csv_data).
+        calendar:  Optional exchange name (e.g. "NYSE"). When provided, bars
+                   that fall on non-trading days are removed before returning.
+                   Forces use_numpy=False internally since filtering requires
+                   BarData objects. Requires pandas_market_calendars.
 
     Requires: pyarrow  (pip install pyarrow)
     """
+    # Calendar filtering requires BarData objects, not a raw numpy array.
+    if calendar:
+        bars = ParquetDataLoader.load(filepath, symbol)
+        return TradingCalendar(calendar).filter_bars(bars)
     if use_numpy:
         return ParquetDataLoader.load_numpy(filepath, symbol)
     return ParquetDataLoader.load(filepath, symbol)
 
 
-def load_csv_data(filepath: str, symbol: str = "", has_header: bool = True) -> List[BarData]:
+def load_csv_data(
+        filepath: str,
+        symbol: str = "",
+        has_header: bool = True,
+        calendar: Optional[str] = None,
+) -> List[BarData]:
     """
     Load OHLCV data from a CSV file.
 
     Accepts 6-column (timestamp, O, H, L, C, V) or 7-column
     (symbol, timestamp, O, H, L, C, V) layouts. Timestamps may be
     in seconds, milliseconds, or nanoseconds.
+
+    Args:
+        filepath:   Path to the .csv file.
+        symbol:     Symbol name to assign when the file has no symbol column.
+        has_header: Whether the file has a header row (default True).
+        calendar:   Optional exchange name (e.g. "NYSE"). When provided, bars
+                    that fall on non-trading days are removed before returning.
+                    Requires pandas_market_calendars.
     """
-    return CSVDataLoader.load(filepath, symbol, has_header)
+    bars = CSVDataLoader.load(filepath, symbol, has_header)
+    if calendar:
+        bars = TradingCalendar(calendar).filter_bars(bars)
+    return bars
 
 
 def load_tick_csv(filepath: str, symbol: str = "", has_header: bool = True) -> List[TickData]:
@@ -194,6 +220,7 @@ def run_backtest(
         strategy: Strategy,
         data: Dict[str, List[BarData]],
         initial_capital: float = 100000.0,
+        calendar: Optional[str] = None,
 ) -> "BacktestResults":
     """
     Run a complete backtest and return a BacktestResults object.
@@ -201,7 +228,20 @@ def run_backtest(
     This is the recommended entry point for one-shot backtests. For more
     control over execution config, position sizing, and risk limits, use
     BacktestEngine directly.
+
+    Args:
+        strategy:        Strategy instance.
+        data:            Dict mapping symbol to List[BarData].
+        initial_capital: Starting capital.
+        calendar:        Optional exchange name (e.g. "NYSE"). When provided,
+                         each symbol's bar series is filtered to remove bars
+                         that fall on non-trading days before the backtest runs.
+                         Requires pandas_market_calendars.
     """
+    if calendar:
+        cal  = TradingCalendar(calendar)
+        data = {sym: cal.filter_bars(bars) for sym, bars in data.items()}
+
     engine      = create_backtest(initial_capital, data, strategy)
     final_value = engine.run()
 
@@ -351,6 +391,8 @@ __all__ = [
     'RiskCheckResult', 'RiskCheckResponse', 'RiskLimits', 'RiskManager',
     # Portfolio context
     'PortfolioContext',
+    # Trading calendar
+    'TradingCalendar',
     # Utilities
     'hello', 'version',
     'ParquetDataLoader', 'load_parquet_data',
