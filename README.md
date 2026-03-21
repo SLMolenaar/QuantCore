@@ -473,7 +473,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Open areas if you want to dig in:
 
 - **Stop / Stop-Limit orders**: order type enum and matching engine
 - **VWAP / TWAP algos**: `ExecutionEngine`, child order slicing
-- **Trading calendar**: holiday/early-close filtering before bars hit the engine
 - **Multi-strategy portfolio**: shared capital across strategies with a meta-allocator
 - **Parallel sweeps on Linux**: `n_jobs` exists but Windows spawn overhead kills it; a Linux worker pool would make it actually useful
 
