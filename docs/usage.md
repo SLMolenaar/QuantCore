@@ -179,8 +179,8 @@ print(f"First bar: {bars[0].symbol} open={bars[0].open} close={bars[0].close}")
 ## Data Normalization
 
 QuantCore does not adjust raw prices for corporate actions internally.
-Feed it **adjusted data** — where close prices are continuous across splits
-and dividends — for correct results.
+Feed it **adjusted data**, where close prices are continuous across splits
+and dividends, for correct results.
 
 Most data vendors offer adjusted data:
 - Yahoo Finance: use `Adj Close` instead of `Close`
@@ -622,16 +622,17 @@ print(results)
 Fields:
 
 ```python
-results.strategy_name    # str
-results.initial_capital  # float
-results.final_value      # float
-results.total_pnl        # float
-results.total_fees       # float
-results.net_pnl          # float (property: final_value - initial_capital)
-results.return_pct       # float
-results.equity_curve     # List[float]
-results.timestamps       # List[int], nanoseconds
-results.trade_pnls       # List[float], per-trade PnL for all closed trades
+results.strategy_name           # str
+results.initial_capital         # float
+results.final_value             # float
+results.total_pnl               # float
+results.total_fees              # float
+results.net_pnl                 # float (property: final_value - initial_capital)
+results.return_pct              # float
+results.equity_curve            # List[float]
+results.timestamps              # List[int], nanoseconds
+results.trade_pnls              # List[float], per-trade PnL for all closed trades
+results.benchmark_equity_curve  # List[float] or None, set by run_backtest benchmark args
 ```
 
 ### Computing metrics
@@ -644,6 +645,8 @@ print(results.metrics)
 ```
 
 The `metrics` property raises `RuntimeError` if accessed before calling `compute()`.
+
+When a benchmark equity curve is present, `.compute()` also calculates benchmark-relative metrics automatically. See [Benchmark Comparison](#benchmark-comparison) below.
 
 ### Reading from the engine directly
 
@@ -968,13 +971,14 @@ import numpy as np
 from quantcore.analytics import (
     calculate_returns,
     calculate_all_metrics,
+    calculate_benchmark_metrics,
     infer_periods_per_year,
     rolling_sharpe,
     rolling_volatility,
     monthly_returns,
     underwater_plot_data,
 )
- 
+
 equity     = np.array(engine.get_equity_curve())
 timestamps = np.array(engine.get_timestamps())
 returns    = calculate_returns(equity)
@@ -998,7 +1002,8 @@ Useful when you need the correct annualisation factor for a custom calculation:
 
 ```python
 ppy = infer_periods_per_year(timestamps)
-# ~526_000 for 1-minute crypto snapshots (365.25 * 1440)
+# ~525_960 for 1-minute crypto snapshots (365.25 * 1440)
+# ~362_880 for 1-minute equity snapshots (252 * 1440)
 # ~365     for daily bars
 # 252      fallback when fewer than 2 timestamps are provided
 ```
@@ -1045,6 +1050,107 @@ calendar-day span from the equity peak to recovery (or end of data). When
 `timestamps` are not provided it is `-1`, and `PerformanceMetrics.__str__` prints
 `"n/a (no timestamps)"` rather than a misleading snapshot count.
 
+### Benchmark Comparison
+
+`calculate_benchmark_metrics` computes benchmark-relative performance metrics from
+two period-return arrays. Pass `timestamps` to let it infer the correct annualisation
+factor automatically — this is especially important for intraday and tick data where
+the default of 252 would produce wildly wrong annualised figures.
+
+```python
+from quantcore.analytics import calculate_benchmark_metrics
+
+bm_metrics = calculate_benchmark_metrics(
+    strategy_returns,   # np.ndarray, output of calculate_returns on strategy equity
+    benchmark_returns,  # np.ndarray, output of calculate_returns on benchmark equity
+    timestamps=timestamps,  # recommended — auto-infers periods_per_year
+)
+print(bm_metrics)
+# ============================================================
+#   Benchmark Comparison
+# ============================================================
+#   Benchmark Total Return:        3.74%
+#   Benchmark Annual Return:      52.34%
+#   Active Return (ann.):        -54.30%
+#
+#   Alpha (ann.):                 -2.09%
+#   Beta:                          0.00
+#   Correlation:                   0.13
+#   R-Squared:                     0.02
+#
+#   Tracking Error (ann.):        50.75%
+#   Information Ratio:            -1.07
+#
+#   Up Capture:                    0.00%
+#   Down Capture:                  2.13%
+# ============================================================
+```
+
+**Signature:**
+
+```python
+calculate_benchmark_metrics(
+    strategy_returns,             # np.ndarray of period returns
+    benchmark_returns,            # np.ndarray of period returns
+    periods_per_year=None,        # int or None; when None, auto-inferred from timestamps
+    timestamps=None,              # np.ndarray of int64 nanosecond timestamps
+)
+```
+
+Both return arrays must be the same type as `calculate_returns` output — period
+returns, not equity curves. If the two backtests produced different-length equity
+curves, align them on a common timestamp index before calling this function; the
+function clips to the shorter of the two arrays as a fallback but alignment is
+more correct.
+
+**`BenchmarkMetrics` fields** (all percentages except dimensionless ratios):
+
+```python
+bm_metrics.benchmark_total_return       # float, total benchmark return (%)
+bm_metrics.benchmark_annualized_return  # float, annualised benchmark return (%)
+bm_metrics.active_return                # float, annualised strategy minus benchmark (%)
+bm_metrics.alpha                        # float, CAPM alpha annualised (%)
+bm_metrics.beta                         # float, OLS slope of strategy on benchmark returns
+bm_metrics.correlation                  # float, Pearson correlation [-1, 1]
+bm_metrics.r_squared                    # float, fraction of variance explained [0, 1]
+bm_metrics.tracking_error               # float, annualised std of active returns (%)
+bm_metrics.information_ratio            # float, active_return / tracking_error
+bm_metrics.up_capture                   # float, strategy / benchmark return in up periods (%)
+bm_metrics.down_capture                 # float, strategy / benchmark return in down periods (%)
+```
+
+**Annualisation and `periods_per_year`:** passing `timestamps` is strongly recommended.
+Without it the function defaults to 252 (daily bars), which is correct for daily equity
+data but wrong for everything else. On 1-minute crypto bars with a 30-day backtest,
+using 252 compresses 30 days of data into ~182 implied years and collapses all annualised
+figures toward zero. With the correct ~525,960 periods-per-year, the same 3.74% monthly
+BTC gain annualises correctly to ~52%.
+
+**Using benchmark metrics with `BacktestResults`:** when `benchmark_equity_curve` is set
+on a `BacktestResults` object (either from `run_backtest` with benchmark arguments or by
+assigning it manually), `.compute()` calculates benchmark metrics automatically and stores
+them in `results.benchmark_metrics`. The timestamps from the strategy run are used for
+`periods_per_year` inference, so no manual override is needed:
+
+```python
+# Via run_backtest — benchmark runs automatically
+results = qc.run_backtest(
+    strategy=MyStrategy(),
+    data={'AAPL': bars},
+    initial_capital=100_000.0,
+    benchmark_strategy=qc.BuyAndHold(),
+).compute()
+
+print(results)           # summary includes active return, alpha, beta, IR, capture ratios
+print(results.metrics)          # full PerformanceMetrics
+print(results.benchmark_metrics)  # BenchmarkMetrics, or None if no benchmark
+
+# Or assign manually after the fact
+results.benchmark_equity_curve = np.array(bm_engine.get_equity_curve())
+results.compute()
+print(results.benchmark_metrics)
+```
+
 ### Individual metric functions
 
 ```python
@@ -1058,19 +1164,19 @@ from quantcore.analytics import (
     calculate_calmar_ratio,
     analyze_trades,
 )
- 
+
 total_return = calculate_total_return(equity)                              # float, %
 ann_ret      = calculate_annualized_return(equity, periods_per_year=252)  # float, %
 sharpe       = calculate_sharpe_ratio(returns)                            # float
 sortino      = calculate_sortino_ratio(returns)                           # float
 vol          = calculate_volatility(returns, periods_per_year=252)        # float, %
- 
+
 # timestamps is optional; when provided, duration is calendar days.
 # When omitted, duration is -1 (indeterminate).
 max_dd, dur  = calculate_max_drawdown(equity, timestamps=timestamps)      # (float %, int)
- 
+
 calmar       = calculate_calmar_ratio(ann_ret, max_dd)                    # float
- 
+
 trade_stats  = analyze_trades([100.0, -50.0, 200.0, -30.0, 80.0])
 # dict with keys: total_trades, win_rate, profit_factor,
 #                 avg_win, avg_loss, largest_win, largest_loss
@@ -1082,12 +1188,12 @@ trade_stats  = analyze_trades([100.0, -50.0, 200.0, -30.0, 80.0])
 # periods_per_year defaults to 252.
 # For tick/minute data pass the correct value or use infer_periods_per_year:
 ppy = infer_periods_per_year(timestamps)
- 
+
 roll_sharpe = rolling_sharpe(returns, window=60, periods_per_year=ppy)
 # np.ndarray of length len(returns) - window + 1
 # NaN where the rolling window is entirely flat (std == 0) — renders as a
 # gap in charts rather than a misleading spike.
- 
+
 roll_vol = rolling_volatility(returns, window=60, periods_per_year=ppy)
 # np.ndarray, annualized volatility in %
 ```
@@ -1109,7 +1215,7 @@ dd = underwater_plot_data(equity)
 # np.ndarray, same length as equity
 # values are drawdown % from running peak, always <= 0
 ```
- 
+
 ---
 
 ## 9. Visualizations
@@ -1119,6 +1225,7 @@ All plotting functions live in `quantcore.plotting` and return `matplotlib.figur
 ```python
 from quantcore.plotting import (
     plot_equity_curve,
+    plot_benchmark_comparison,
     plot_underwater,
     plot_returns_distribution,
     plot_rolling_metrics,
@@ -1134,13 +1241,43 @@ from quantcore.plotting import (
 ```python
 fig = plot_equity_curve(
     equity_curve=equity,
-    timestamps=timestamps,   # optional, enables date axis
+    timestamps=timestamps,          # optional, enables date axis
     title="My Strategy",
     figsize=(14, 7),
-    show_drawdown=True       # shade drawdown periods in red
+    show_drawdown=True,             # shade strategy drawdown periods in red
+    benchmark_equity=bm_equity,     # optional, overlays benchmark line
+    benchmark_label="Buy & Hold",   # legend label for the benchmark
 )
 fig.show()
 ```
+
+When `benchmark_equity` is provided both curves are normalised to 100 at the start so
+different initial capitals do not distort the overlay. The y-axis label changes to
+"Normalised Value (100 = start)" accordingly.
+
+### plot_benchmark_comparison
+
+Dedicated three-panel benchmark comparison chart. Shows more detail than the overlay
+in `plot_equity_curve` or `plot_full_tearsheet`.
+
+```python
+fig = plot_benchmark_comparison(
+    equity_curve=equity,
+    benchmark_equity=bm_equity,
+    timestamps=timestamps,
+    strategy_label="My Strategy",
+    benchmark_label="Buy & Hold",
+    title="Strategy vs Benchmark",
+    figsize=(14, 10),
+    periods_per_year=None,    # auto-inferred from timestamps when None
+)
+fig.show()
+```
+
+The three panels are: normalised equity curves overlaid (both start at 100), rolling
+active return with green/red fill for out/underperformance periods, and side-by-side
+underwater drawdown comparison. The rolling window is sized to approximately one
+calendar quarter.
 
 ### plot_underwater
 
@@ -1181,9 +1318,7 @@ fig = plot_rolling_metrics(
 ```
 
 NaN values from flat-equity windows render as gaps in the line rather than
-spikes. This replaces the previous behaviour where windows with fewer than
-10% non-zero returns were blanked entirely, which suppressed all output for
-low-frequency strategies.
+spikes.
 
 ### plot_monthly_returns_heatmap
 
@@ -1191,7 +1326,7 @@ Requires a monthly returns DataFrame from `analytics.monthly_returns`:
 
 ```python
 from quantcore.analytics import monthly_returns
- 
+
 monthly = monthly_returns(equity, timestamps)
 fig = plot_monthly_returns_heatmap(monthly)
 ```
@@ -1203,7 +1338,7 @@ Scatter plot of individual trade returns plus cumulative:
 ```python
 entry_prices = [100.0, 105.0, 110.0]
 exit_prices  = [103.0, 102.0, 115.0]
- 
+
 fig = plot_trade_analysis(entry_prices, exit_prices)
 ```
 
@@ -1211,18 +1346,27 @@ fig = plot_trade_analysis(entry_prices, exit_prices)
 
 All charts in one figure (equity curve, drawdown, returns distribution,
 rolling Sharpe, rolling volatility). Rolling window and annualisation factor
-are both auto-inferred from `timestamps`:
+are both auto-inferred from `timestamps`. When `benchmark_equity` is supplied
+the equity curve panel overlays both curves normalised to 100:
 
 ```python
 import matplotlib.pyplot as plt
- 
-fig = plot_full_tearsheet(equity, returns, timestamps=timestamps)
+
+fig = plot_full_tearsheet(
+    equity, returns,
+    timestamps=timestamps,
+    title="My Strategy",
+    benchmark_equity=bm_equity,     # optional
+    benchmark_label="Buy & Hold",   # legend label for the benchmark
+)
 plt.show(block=True)
 ```
 
 ### save_all_plots
 
-Saves individual plot files to a directory:
+Saves individual plot files to a directory. When `benchmark_equity` is provided
+an additional `{strategy_name}_benchmark.png` file is written using
+`plot_benchmark_comparison`:
 
 ```python
 save_all_plots(
@@ -1230,10 +1374,12 @@ save_all_plots(
     returns=returns,
     timestamps=timestamps,
     output_dir='plots',
-    strategy_name='mean_reversion'
+    strategy_name='mean_reversion',
+    benchmark_equity=bm_equity,     # optional
+    benchmark_label="Buy & Hold",   # optional
 )
 # Writes: mean_reversion_equity.png, _underwater.png, _returns_dist.png,
-#         _rolling.png, _tearsheet.png
+#         _rolling.png, _tearsheet.png, _benchmark.png (when benchmark provided)
 ```
 
 ---
@@ -1413,7 +1559,7 @@ result.final_value      # float
 
 `n_jobs` controls worker processes. `n_jobs=-1` uses all available cores. Key constraints:
 
-- `strategy_factory` must be **picklable** - pass a class or a module-level function, not a lambda or closure. Lambdas will raise `PicklingError` at runtime.
+- `strategy_factory` must be **picklable** - pass a class or module-level function, not a lambda or closure. Lambdas will raise `PicklingError` at runtime.
 - On Windows, guard your entry point with `if __name__ == '__main__':`.
 - Process spawn overhead on Windows is ~500 ms per worker. Parallelism only pays off when each combo takes substantially longer than that (e.g. 100-year backtests at ~240 ms each give a clear speedup; 5-year backtests at ~11 ms each do not). On Linux (`fork`-based), the break-even point is much lower.
 
