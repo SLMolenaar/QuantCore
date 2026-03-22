@@ -221,6 +221,8 @@ def run_backtest(
         data: Dict[str, List[BarData]],
         initial_capital: float = 100000.0,
         calendar: Optional[str] = None,
+        benchmark: Optional[Dict[str, List[BarData]]] = None,
+        benchmark_strategy: Optional[Strategy] = None,
 ) -> "BacktestResults":
     """
     Run a complete backtest and return a BacktestResults object.
@@ -230,13 +232,22 @@ def run_backtest(
     BacktestEngine directly.
 
     Args:
-        strategy:        Strategy instance.
-        data:            Dict mapping symbol to List[BarData].
-        initial_capital: Starting capital.
-        calendar:        Optional exchange name (e.g. "NYSE"). When provided,
-                         each symbol's bar series is filtered to remove bars
-                         that fall on non-trading days before the backtest runs.
-                         Requires pandas_market_calendars.
+        strategy:           Strategy instance.
+        data:               Dict mapping symbol to List[BarData].
+        initial_capital:    Starting capital.
+        calendar:           Optional exchange name (e.g. "NYSE"). When provided,
+                            each symbol's bar series is filtered to remove bars
+                            that fall on non-trading days before the backtest runs.
+                            Requires pandas_market_calendars.
+        benchmark:          Optional data dict for the benchmark backtest. When
+                            provided a second backtest is run automatically and the
+                            resulting equity curve is stored on BacktestResults for
+                            use with compute() and the plotting functions.
+                            Defaults to running BuyAndHold on the same `data` dict
+                            when benchmark_strategy is provided without benchmark.
+        benchmark_strategy: Strategy used for the benchmark backtest. Defaults to
+                            BuyAndHold() when benchmark data is given but no
+                            strategy is specified.
     """
     if calendar:
         cal  = TradingCalendar(calendar)
@@ -245,16 +256,26 @@ def run_backtest(
     engine      = create_backtest(initial_capital, data, strategy)
     final_value = engine.run()
 
+    # Run the benchmark backtest when the caller requested one.
+    benchmark_equity_curve = None
+    if benchmark is not None or benchmark_strategy is not None:
+        bm_data     = benchmark if benchmark is not None else data
+        bm_strategy = benchmark_strategy if benchmark_strategy is not None else BuyAndHold()
+        bm_engine   = create_backtest(initial_capital, bm_data, bm_strategy)
+        bm_engine.run()
+        benchmark_equity_curve = bm_engine.get_equity_curve()
+
     return BacktestResults({
-        'strategy':        strategy.get_name(),
-        'initial_capital': initial_capital,
-        'final_value':     final_value,
-        'total_pnl':       engine.get_total_pnl(),
-        'total_fees':      engine.get_total_fees(),
-        'return_pct':      (final_value / initial_capital - 1.0) * 100.0,
-        'equity_curve':    engine.get_equity_curve(),
-        'timestamps':      engine.get_timestamps(),
-        'trade_pnls':      engine.get_trade_pnls(),
+        'strategy':                strategy.get_name(),
+        'initial_capital':         initial_capital,
+        'final_value':             final_value,
+        'total_pnl':               engine.get_total_pnl(),
+        'total_fees':              engine.get_total_fees(),
+        'return_pct':              (final_value / initial_capital - 1.0) * 100.0,
+        'equity_curve':            engine.get_equity_curve(),
+        'timestamps':              engine.get_timestamps(),
+        'trade_pnls':              engine.get_trade_pnls(),
+        'benchmark_equity_curve':  benchmark_equity_curve,
     })
 
 
@@ -310,30 +331,52 @@ class BacktestResults:
     """Container for backtest results with lazy metric computation."""
 
     def __init__(self, results: Dict):
-        self.strategy_name   = results.get('strategy', 'Unknown')
-        self.initial_capital = results.get('initial_capital', 0.0)
-        self.final_value     = results.get('final_value', 0.0)
-        self.total_pnl       = results.get('total_pnl', 0.0)
-        self.total_fees      = results.get('total_fees', 0.0)
-        self.return_pct      = results.get('return_pct', 0.0)
-        self.equity_curve    = results.get('equity_curve', [])
-        self.timestamps      = results.get('timestamps', [])
-        self.trade_pnls      = results.get('trade_pnls', [])
-        self._metrics        = None
+        self.strategy_name           = results.get('strategy', 'Unknown')
+        self.initial_capital         = results.get('initial_capital', 0.0)
+        self.final_value             = results.get('final_value', 0.0)
+        self.total_pnl               = results.get('total_pnl', 0.0)
+        self.total_fees              = results.get('total_fees', 0.0)
+        self.return_pct              = results.get('return_pct', 0.0)
+        self.equity_curve            = results.get('equity_curve', [])
+        self.timestamps              = results.get('timestamps', [])
+        self.trade_pnls              = results.get('trade_pnls', [])
+        self.benchmark_equity_curve  = results.get('benchmark_equity_curve', None)
+        self._metrics                = None
+        self._benchmark_metrics      = None
 
     @property
     def net_pnl(self) -> float:
         return self.final_value - self.initial_capital
 
     def compute(self) -> "BacktestResults":
-        """Compute and cache performance metrics. Returns self for chaining."""
-        from .analytics import calculate_all_metrics
+        """
+        Compute and cache performance metrics. Returns self for chaining.
+
+        When benchmark_equity_curve is set (either from run_backtest with a
+        benchmark argument or by assigning it manually), benchmark-relative
+        metrics are computed and stored in benchmark_metrics.
+        """
         import numpy as np
-        self._metrics = calculate_all_metrics(
-            np.array(self.equity_curve),
-            trade_pnls=self.trade_pnls if self.trade_pnls else None,
-            timestamps=np.array(self.timestamps, dtype=np.int64) if self.timestamps else None,
+        from .analytics import (
+            calculate_all_metrics, calculate_returns, calculate_benchmark_metrics,
         )
+
+        equity_arr = np.array(self.equity_curve)
+        ts_arr     = np.array(self.timestamps, dtype=np.int64) if self.timestamps else None
+
+        self._metrics = calculate_all_metrics(
+            equity_arr,
+            trade_pnls=self.trade_pnls if self.trade_pnls else None,
+            timestamps=ts_arr,
+        )
+
+        if self.benchmark_equity_curve is not None:
+            strat_returns = calculate_returns(equity_arr)
+            bm_returns    = calculate_returns(np.array(self.benchmark_equity_curve))
+            self._benchmark_metrics = calculate_benchmark_metrics(
+                strat_returns, bm_returns, timestamps=ts_arr
+            )
+
         return self
 
     @property
@@ -341,6 +384,16 @@ class BacktestResults:
         if self._metrics is None:
             raise RuntimeError("Call .compute() first.")
         return self._metrics
+
+    @property
+    def benchmark_metrics(self):
+        """
+        Benchmark-relative metrics. None if no benchmark equity curve was provided
+        or if compute() has not been called yet.
+        """
+        if self._metrics is None:
+            raise RuntimeError("Call .compute() first.")
+        return self._benchmark_metrics
 
     def __str__(self) -> str:
         lines = [
@@ -355,6 +408,22 @@ class BacktestResults:
             f"Return:           {self.return_pct:>15.2f}%",
             "=" * 60,
             ]
+
+        if self._benchmark_metrics is not None:
+            bm = self._benchmark_metrics
+            lines += [
+                "",
+                "  vs Benchmark",
+                "-" * 60,
+                f"  Active Return (ann.):    {bm.active_return:>10.2f}%",
+                f"  Alpha (ann.):            {bm.alpha:>10.2f}%",
+                f"  Beta:                    {bm.beta:>10.2f}",
+                f"  Information Ratio:       {bm.information_ratio:>10.2f}",
+                f"  Up Capture:              {bm.up_capture:>10.2f}%",
+                f"  Down Capture:            {bm.down_capture:>10.2f}%",
+                "=" * 60,
+                ]
+
         return "\n".join(lines)
 
 

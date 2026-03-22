@@ -5,6 +5,7 @@ Standard metrics for evaluating strategy performance:
 - Returns (total, annualized, rolling)
 - Risk metrics (Sharpe, Sortino, volatility, drawdown)
 - Trade analysis (win rate, profit factor, avg trade)
+- Benchmark comparison (alpha, beta, information ratio, capture ratios)
 """
 
 import numpy as np
@@ -113,6 +114,225 @@ class PerformanceMetrics:
             "=" * 60,
             ]
         return "\n".join(lines)
+
+
+@dataclass
+class BenchmarkMetrics:
+    """
+    Benchmark-relative performance metrics.
+
+    All return/alpha values are in percentage format (10.5 = 10.5%),
+    consistent with PerformanceMetrics. Ratios (beta, correlation, R²,
+    capture ratios, information ratio) are dimensionless.
+
+    Fields
+    ------
+    benchmark_total_return      : total return of the benchmark over the period (%)
+    benchmark_annualized_return : annualized benchmark return (%)
+    active_return               : annualized strategy return minus annualized
+                                  benchmark return (%)
+    alpha                       : CAPM alpha — annualized excess return after
+                                  removing the portion explained by beta (%)
+    beta                        : slope of strategy returns regressed on benchmark
+                                  returns; 1.0 means the strategy moves in lock-step
+                                  with the benchmark
+    correlation                 : Pearson correlation between strategy and benchmark
+                                  period returns
+    r_squared                   : fraction of strategy return variance explained by
+                                  the benchmark (correlation²)
+    tracking_error              : annualized standard deviation of active returns
+                                  (strategy minus benchmark) (%)
+    information_ratio           : active_return / tracking_error; measures
+                                  risk-adjusted outperformance consistency
+    up_capture                  : ratio of strategy return to benchmark return
+                                  in periods where the benchmark rose (>100 = beats
+                                  benchmark on up moves)
+    down_capture                : ratio of strategy return to benchmark return
+                                  in periods where the benchmark fell (<100 = loses
+                                  less than the benchmark on down moves)
+    """
+    benchmark_total_return:      float
+    benchmark_annualized_return: float
+    active_return:               float
+    alpha:                       float
+    beta:                        float
+    correlation:                 float
+    r_squared:                   float
+    tracking_error:              float
+    information_ratio:           float
+    up_capture:                  float
+    down_capture:                float
+
+    def __str__(self) -> str:
+        lines = [
+            "=" * 60,
+            "  Benchmark Comparison",
+            "=" * 60,
+            "",
+            f"  Benchmark Total Return:    {self.benchmark_total_return:>10.2f}%",
+            f"  Benchmark Annual Return:   {self.benchmark_annualized_return:>10.2f}%",
+            f"  Active Return (ann.):      {self.active_return:>10.2f}%",
+            "",
+            f"  Alpha (ann.):              {self.alpha:>10.2f}%",
+            f"  Beta:                      {self.beta:>10.2f}",
+            f"  Correlation:               {self.correlation:>10.2f}",
+            f"  R-Squared:                 {self.r_squared:>10.2f}",
+            "",
+            f"  Tracking Error (ann.):     {self.tracking_error:>10.2f}%",
+            f"  Information Ratio:         {self.information_ratio:>10.2f}",
+            "",
+            f"  Up Capture:                {self.up_capture:>10.2f}%",
+            f"  Down Capture:              {self.down_capture:>10.2f}%",
+            "",
+            "=" * 60,
+            ]
+        return "\n".join(lines)
+
+
+def calculate_benchmark_metrics(
+        strategy_returns:   np.ndarray,
+        benchmark_returns:  np.ndarray,
+        periods_per_year:   Optional[int] = None,
+        timestamps:         Optional[np.ndarray] = None,
+) -> BenchmarkMetrics:
+    """
+    Calculate benchmark-relative performance metrics.
+
+    Both arrays must be period returns (output of calculate_returns), not
+    equity curves. They must have the same length — align them on a common
+    timestamp index before calling this function if the two backtests
+    produced different-length equity curves.
+
+    Args:
+        strategy_returns:  Period returns for the strategy.
+        benchmark_returns: Period returns for the benchmark.
+        periods_per_year:  Snapshots per year for annualisation. When None
+                           (default), inferred from timestamps if provided,
+                           otherwise falls back to 252. Pass an explicit value
+                           to override (e.g. 252 for daily, 525_960 for
+                           1-minute crypto bars).
+        timestamps:        Nanosecond UNIX timestamps aligned with the
+                           equity curve (one element longer than the returns
+                           arrays). Used to auto-infer periods_per_year when
+                           that argument is None.
+
+    Returns:
+        BenchmarkMetrics dataclass.
+    """
+    if periods_per_year is None:
+        periods_per_year = infer_periods_per_year(timestamps) \
+            if timestamps is not None else 252
+    if len(strategy_returns) == 0 or len(benchmark_returns) == 0:
+        return BenchmarkMetrics(
+            benchmark_total_return=0.0,
+            benchmark_annualized_return=0.0,
+            active_return=0.0,
+            alpha=0.0,
+            beta=0.0,
+            correlation=0.0,
+            r_squared=0.0,
+            tracking_error=0.0,
+            information_ratio=0.0,
+            up_capture=0.0,
+            down_capture=0.0,
+        )
+
+    # Align lengths — use the shorter of the two to avoid index errors.
+    n = min(len(strategy_returns), len(benchmark_returns))
+    s = strategy_returns[:n]
+    b = benchmark_returns[:n]
+
+    # ---- benchmark return summary ----
+    bm_growth = float(np.prod(1.0 + b))
+    bm_total_return = (bm_growth - 1.0) * 100.0
+    years = n / periods_per_year
+    if years > 0 and bm_growth > 0:
+        bm_ann_return = (bm_growth ** (1.0 / years) - 1.0) * 100.0
+    else:
+        bm_ann_return = 0.0
+
+    # ---- active return (annualised) ----
+    strat_growth = float(np.prod(1.0 + s))
+    if years > 0 and strat_growth > 0:
+        strat_ann_return = (strat_growth ** (1.0 / years) - 1.0) * 100.0
+    else:
+        strat_ann_return = 0.0
+    active_return = strat_ann_return - bm_ann_return
+
+    # ---- beta and CAPM alpha ----
+    # OLS regression: s = alpha_period + beta * b + epsilon
+    # beta  = Cov(s, b) / Var(b)
+    # alpha_period = mean(s) - beta * mean(b)
+    # Annualise alpha: alpha_ann = alpha_period * periods_per_year
+    bm_var = float(np.var(b, ddof=1))
+    if bm_var > 1e-12:
+        cov = float(np.cov(s, b)[0, 1])
+        beta = cov / bm_var
+    else:
+        beta = 0.0
+
+    alpha_period = float(np.mean(s)) - beta * float(np.mean(b))
+    alpha_ann    = alpha_period * periods_per_year * 100.0
+
+    # ---- correlation and R² ----
+    s_std = float(np.std(s, ddof=1))
+    b_std = float(np.std(b, ddof=1))
+    if s_std > 1e-12 and b_std > 1e-12:
+        correlation = float(np.corrcoef(s, b)[0, 1])
+    else:
+        correlation = 0.0
+    r_squared = correlation ** 2
+
+    # ---- tracking error (annualised) ----
+    active_returns = s - b
+    tracking_error = float(np.std(active_returns, ddof=1)) * np.sqrt(periods_per_year) * 100.0
+
+    # ---- information ratio ----
+    # IR = mean(active_returns) / std(active_returns) — not annualised separately
+    # because both numerator and denominator scale the same way with period length.
+    if tracking_error > 1e-10:
+        # tracking_error is already annualised (%), so annualise the numerator too.
+        information_ratio = (active_return / tracking_error)
+    else:
+        if active_return > 0:
+            information_ratio = MAX_RATIO_VALUE
+        elif active_return < 0:
+            information_ratio = -MAX_RATIO_VALUE
+        else:
+            information_ratio = 0.0
+
+    # ---- up/down capture ratios ----
+    up_mask   = b > 0
+    down_mask = b < 0
+
+    if np.any(up_mask):
+        # geometric compounding of strategy and benchmark returns in up periods
+        up_strat_return = float(np.prod(1.0 + s[up_mask]) - 1.0)
+        up_bm_return    = float(np.prod(1.0 + b[up_mask]) - 1.0)
+        up_capture = (up_strat_return / up_bm_return * 100.0) if abs(up_bm_return) > 1e-12 else 0.0
+    else:
+        up_capture = 0.0
+
+    if np.any(down_mask):
+        down_strat_return = float(np.prod(1.0 + s[down_mask]) - 1.0)
+        down_bm_return    = float(np.prod(1.0 + b[down_mask]) - 1.0)
+        down_capture = (down_strat_return / down_bm_return * 100.0) if abs(down_bm_return) > 1e-12 else 0.0
+    else:
+        down_capture = 0.0
+
+    return BenchmarkMetrics(
+        benchmark_total_return=bm_total_return,
+        benchmark_annualized_return=bm_ann_return,
+        active_return=active_return,
+        alpha=alpha_ann,
+        beta=float(np.clip(beta, -MAX_RATIO_VALUE, MAX_RATIO_VALUE)),
+        correlation=float(np.clip(correlation, -1.0, 1.0)),
+        r_squared=float(np.clip(r_squared, 0.0, 1.0)),
+        tracking_error=tracking_error,
+        information_ratio=float(np.clip(information_ratio, -MAX_RATIO_VALUE, MAX_RATIO_VALUE)),
+        up_capture=up_capture,
+        down_capture=down_capture,
+    )
 
 
 def calculate_returns(equity_curve: np.ndarray) -> np.ndarray:
