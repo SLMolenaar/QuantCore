@@ -154,13 +154,12 @@ public:
         if (data_.empty() && tick_data_.empty())
             throw std::runtime_error("No market data loaded");
 
-        // Reset all stateful members so run() is reentrant.
         eq_.clear();
         last_px_.clear();
         curr_cap_                = init_cap_;
         next_oid_                = 1;
         halted_                  = false;
-        pending_buy_notional_.clear();
+        pending_buys_.clear();
         gfd_orders_.clear();
         last_event_day_          = -1;
         last_equity_snapshot_ns_ = -1;
@@ -263,8 +262,16 @@ public:
     }
 
 private:
-    // Memory pools declared first, destroyed last, after all objects that
-    // allocate from them.
+    // Tracks the signal-time price and remaining unfilled quantity for each
+    // open buy order. Available cash is reduced by sum(price * remaining_qty)
+    // so subsequent signals on the same bar are sized against realistic cash.
+    // Decremented on each fill, erased on full fill, cancel, or GFD expiry.
+    struct PendingBuy {
+        double price_per_share;
+        double remaining_qty;
+    };
+
+    // Order pool declared before engines so it outlives all orders placed in it.
     std::pmr::unsynchronized_pool_resource order_pool_;
     std::pmr::unsynchronized_pool_resource event_pool_;
 
@@ -286,9 +293,9 @@ private:
     uint64_t next_oid_;
     bool     halted_;
 
-    PositionSizerPtr                 sizer_;
-    std::shared_ptr<RiskManager>     risk_mgr_;
-    std::shared_ptr<PortfolioContext> portfolio_;
+    PositionSizerPtr                  sizer_;
+    std::shared_ptr<RiskManager>      risk_mgr_;
+    std::shared_ptr<PortfolioContext>  portfolio_;
 
     std::vector<double>  equity_;
     std::vector<int64_t> timestamps_;
@@ -308,15 +315,10 @@ private:
 
     ExecutionConfig exec_config_;
 
-    std::unordered_map<uint64_t, double> pending_buy_notional_;
+    std::unordered_map<uint64_t, PendingBuy>                          pending_buys_;
+    std::unordered_map<std::string, std::unordered_set<uint64_t>>     gfd_orders_;
 
-    // GFD order IDs awaiting end-of-day cancellation, keyed by symbol.
-    // Cancelled and cleared whenever the simulation crosses a UTC day boundary.
-    std::unordered_map<std::string, std::unordered_set<uint64_t>> gfd_orders_;
-
-    // UTC day number of the last processed market-data event.
-    // Computed as timestamp_ns / NS_PER_DAY. -1 before the first event.
-    int64_t last_event_day_;
+    int64_t last_event_day_; // UTC day of last market-data event; -1 before first event
 
     static constexpr size_t  PRICE_HISTORY_BUFFER = 10;
     static constexpr double  MIN_ORDER_QTY        = 1e-8;
@@ -324,6 +326,25 @@ private:
 
     static int64_t to_unix_day(int64_t timestamp_ns) noexcept {
         return timestamp_ns / NS_PER_DAY;
+    }
+
+    double pending_buy_notional() const {
+        double total = 0.0;
+        for (const auto& [id, pb] : pending_buys_)
+            total += pb.price_per_share * pb.remaining_qty;
+        return total;
+    }
+
+    void release_pending_buy(uint64_t order_id, double qty_filled) {
+        auto it = pending_buys_.find(order_id);
+        if (it == pending_buys_.end()) return;
+        it->second.remaining_qty -= qty_filled;
+        if (it->second.remaining_qty <= MIN_ORDER_QTY)
+            pending_buys_.erase(it);
+    }
+
+    void cancel_pending_buy(uint64_t order_id) {
+        pending_buys_.erase(order_id);
     }
 
     template<typename T, typename... Args>
@@ -380,7 +401,7 @@ private:
 
     void maybe_snapshot_equity(int64_t timestamp) {
         if (equity_snapshot_interval_ns_ == 0) {
-            // Bar mode: snapshot after the last symbol's event at this timestamp.
+            // Bar mode: snapshot once per bar, after all symbols at this timestamp.
             bool is_last = true;
             if (!eq_.empty()) {
                 auto next = eq_.peek();
@@ -395,7 +416,6 @@ private:
                 risk_mgr_->set_capital(init_cap_, curr_cap_);
             }
         } else {
-            // tick mode: snapshot at most once per interval
             if (last_equity_snapshot_ns_ < 0 ||
                 timestamp - last_equity_snapshot_ns_ >= equity_snapshot_interval_ns_) {
                 equity_.push_back(curr_cap_);
@@ -473,22 +493,24 @@ private:
     void handle_md(EventPtr event) {
         auto md     = std::static_pointer_cast<MarketDataEvent>(event);
         auto symbol = md->get_symbol();
-        double price = md->get_close();
-        last_px_[symbol] = price;
+        last_px_[symbol] = md->get_close();
 
         auto& hist = price_history_[symbol];
-        hist.push_back(price);
+        hist.push_back(md->get_close());
         if (hist.size() > volatility_lookback_ + PRICE_HISTORY_BUFFER)
             hist.pop_front();
 
-        // Cancel any outstanding GFD orders when the simulation crosses a UTC
+        // Cancel GFD orders at UTC day boundaries. cancel_order() is a no-op
+        // for already-filled orders so this is safe to call unconditionally.
         int64_t event_day = to_unix_day(md->get_timestamp());
         if (last_event_day_ >= 0 && event_day > last_event_day_) {
             for (auto& [sym, ids] : gfd_orders_) {
                 auto ee_it = engines_.find(sym);
                 if (ee_it != engines_.end()) {
-                    for (uint64_t id : ids)
+                    for (uint64_t id : ids) {
                         ee_it->second->cancel_order(id);
+                        cancel_pending_buy(id);
+                    }
                 }
             }
             gfd_orders_.clear();
@@ -504,7 +526,7 @@ private:
 
         strat_->on_data(*md);
 
-        // Sort signals by add_data() insertion order for deterministic processing.
+        // Sort by add_data() insertion order for deterministic signal processing.
         auto signals = strat_->get_signals();
         std::sort(signals.begin(), signals.end(),
             [this](const std::shared_ptr<SignalEvent>& a,
@@ -544,11 +566,7 @@ private:
 
         double curr_pos      = ee_it->second->get_position();
         double portfolio_vol = calculate_volatility(sig->get_symbol());
-
-        double pending_notional = 0.0;
-        for (const auto& [id, notional] : pending_buy_notional_)
-            pending_notional += notional;
-        double available_cash = std::max(0.0, portfolio_->get_cash() - pending_notional);
+        double available_cash = std::max(0.0, portfolio_->get_cash() - pending_buy_notional());
 
         double target_pos = 0.0;
 
@@ -601,9 +619,8 @@ private:
         );
         ord->set_order_id(next_oid_++);
 
-        // Reserve the cash for this buy order until the fill settles.
         if (ord_side == Side::Buy)
-            pending_buy_notional_[ord->get_order_id()] = ord_qty * curr_px;
+            pending_buys_[ord->get_order_id()] = {curr_px, ord_qty};
 
         eq_.push(ord);
     }
@@ -618,7 +635,7 @@ private:
 
         if (ord->is_cancel()) {
             engine->cancel_order(ord->get_order_id());
-            pending_buy_notional_.erase(ord->get_order_id());
+            cancel_pending_buy(ord->get_order_id());
             return;
         }
 
@@ -630,7 +647,6 @@ private:
             ord->get_side(), px_cents, qty
         );
 
-        // Track GFD orders so they can be cancelled at the next day boundary.
         if (ord->get_order_type() == OrderType::GoodForDay)
             gfd_orders_[ord->get_symbol()].insert(ord->get_order_id());
 
@@ -647,7 +663,7 @@ private:
                 ? raw_price * (1.0 + slippage_pct)
                 : raw_price * (1.0 - slippage_pct);
 
-            // Strategy orders are always takers, they cross the spread.
+            // Strategy orders are takers; always charge taker_fee.
             double commission = fill_price * our_trade.quantity_ * exec_config_.taker_fee;
 
             eq_.push(make_event<FillEvent>(
@@ -661,9 +677,8 @@ private:
     void handle_fill(EventPtr event) {
         auto fill = std::static_pointer_cast<FillEvent>(event);
 
-        // Release the cash reservation held for this order.
         if (fill->get_side() == Side::Buy)
-            pending_buy_notional_.erase(fill->get_order_id());
+            release_pending_buy(fill->get_order_id(), fill->get_quantity());
 
         auto ee_it = engines_.find(fill->get_symbol());
         if (ee_it != engines_.end()) {
@@ -676,4 +691,4 @@ private:
     }
 };
 
-} // namespace quantcore
+}
