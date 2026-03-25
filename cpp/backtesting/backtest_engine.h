@@ -15,6 +15,7 @@
 #include "../Execution.h"
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory_resource>
 #include <utility>
 #include <vector>
@@ -29,7 +30,7 @@ namespace quantcore {
 
 class BacktestEngine {
 public:
-    BacktestEngine(double initial_capital = 100000.0)
+    explicit BacktestEngine(double initial_capital = 100000.0)
         : init_cap_(initial_capital)
         , curr_cap_(initial_capital)
         , next_oid_(1)
@@ -40,12 +41,15 @@ public:
         , mm_levels_(5)
         , mm_spread_(0.0001)
         , mm_depth_(100000)
-        , mm_refresh_interval_ns_(0)   // 0 = refresh every event
+        , mm_refresh_interval_ns_(0)
+        , equity_snapshot_interval_ns_(0)
+        , last_equity_snapshot_ns_(-1)
         , default_volatility_(0.02)
         , default_stop_distance_(0.05)
         , volatility_lookback_(20)
         , bars_per_year_(252)
         , first_bar_timestamp_(0)
+        , last_event_day_(-1)
     {
         if (initial_capital <= 0.0)
             throw std::invalid_argument("Initial capital must be positive");
@@ -66,10 +70,10 @@ public:
             symbol_order_.push_back(symbol);
         }
         data_[symbol]          = bars;
-        tick_data_.erase(symbol); // clear any previously loaded tick data for this symbol
+        tick_data_.erase(symbol);
         engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
         mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
-        price_history_[symbol] = std::deque<double>();
+        price_history_[symbol] = {};
     }
 
     void add_tick_data(const std::string& symbol, const TickSeries& ticks) {
@@ -82,10 +86,10 @@ public:
             }
         }
         tick_data_[symbol]     = ticks;
-        data_.erase(symbol);  // clear any previously loaded bar data for this symbol
+        data_.erase(symbol);
         engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
         mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
-        price_history_[symbol] = std::deque<double>();
+        price_history_[symbol] = {};
     }
 
     void set_strategy(std::shared_ptr<Strategy> strat) {
@@ -113,77 +117,74 @@ public:
         mm_depth_  = depth;
     }
 
-    // Minimum nanoseconds between market-maker quote refreshes per symbol.
-    // Useful with tick data to avoid refreshing on every single tick.
-    // 0 (default) means refresh on every event.
     void set_mm_refresh_interval(int64_t interval_ns) {
         if (interval_ns < 0)
             throw std::invalid_argument("Market maker refresh interval cannot be negative");
         mm_refresh_interval_ns_ = interval_ns;
     }
-
     int64_t get_mm_refresh_interval() const { return mm_refresh_interval_ns_; }
 
+    void set_equity_snapshot_interval(int64_t interval_ns) {
+        if (interval_ns < 0)
+            throw std::invalid_argument("Equity snapshot interval cannot be negative");
+        equity_snapshot_interval_ns_ = interval_ns;
+    }
+    int64_t get_equity_snapshot_interval() const { return equity_snapshot_interval_ns_; }
+
     void set_volatility_params(double default_vol, double stop_distance, size_t lookback) {
-        if (default_vol   <= 0.0 || default_vol   > 1.0) throw std::invalid_argument("Default volatility must be between 0 and 1");
-        if (stop_distance <= 0.0 || stop_distance > 1.0) throw std::invalid_argument("Stop distance must be between 0 and 1");
+        if (default_vol   <= 0.0 || default_vol   > 1.0)
+            throw std::invalid_argument("Default volatility must be between 0 and 1");
+        if (stop_distance <= 0.0 || stop_distance > 1.0)
+            throw std::invalid_argument("Stop distance must be between 0 and 1");
         default_volatility_    = default_vol;
         default_stop_distance_ = stop_distance;
         volatility_lookback_   = lookback;
     }
 
     void set_bars_per_year(size_t bars_per_year) {
-        if (bars_per_year == 0) throw std::invalid_argument("Bars per year must be positive");
+        if (bars_per_year == 0)
+            throw std::invalid_argument("Bars per year must be positive");
         bars_per_year_ = bars_per_year;
     }
-
     size_t get_bars_per_year() const { return bars_per_year_; }
 
-    // Nanosecond interval at which the equity curve is snapshotted during
-    // tick-mode runs. 0 (default) means one snapshot per bar (bar mode) or
-    // one snapshot per tick (tick mode — can be very dense).
-    // Set to e.g. 60_000_000_000 to snapshot once per minute.
-    void set_equity_snapshot_interval(int64_t interval_ns) {
-        if (interval_ns < 0)
-            throw std::invalid_argument("Equity snapshot interval cannot be negative");
-        equity_snapshot_interval_ns_ = interval_ns;
-    }
-
-    int64_t get_equity_snapshot_interval() const { return equity_snapshot_interval_ns_; }
-
     double run() {
-        if (!strat_) throw std::runtime_error("No strategy set");
-        if (data_.empty() && tick_data_.empty()) throw std::runtime_error("No market data loaded");
+        if (!strat_)
+            throw std::runtime_error("No strategy set");
+        if (data_.empty() && tick_data_.empty())
+            throw std::runtime_error("No market data loaded");
 
+        // Reset all stateful members so run() is reentrant.
         eq_.clear();
         last_px_.clear();
-        curr_cap_ = init_cap_;
-        next_oid_ = 1;
-        halted_   = false;
-        intrabar_cash_reserved_ = 0.0;
-        intrabar_timestamp_     = -1;
+        curr_cap_                = init_cap_;
+        next_oid_                = 1;
+        halted_                  = false;
+        pending_buy_notional_.clear();
+        gfd_orders_.clear();
+        last_event_day_          = -1;
+        last_equity_snapshot_ns_ = -1;
+        mm_last_refresh_.clear();
+
         strat_->reset();
         risk_mgr_->reset();
         risk_mgr_->set_capital(init_cap_, init_cap_);
 
-        portfolio_ = std::make_shared<PortfolioContext>(init_cap_);
+        portfolio_         = std::make_shared<PortfolioContext>(init_cap_);
         strat_->portfolio_ = portfolio_.get();
 
         equity_.clear();
         timestamps_.clear();
 
-        mm_last_refresh_.clear();
-        last_equity_snapshot_ns_ = -1;
-
         for (const auto& [symbol, bars] : data_) {
             engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
             mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
-            price_history_[symbol] = std::deque<double>();
+            price_history_[symbol] = {};
         }
         for (const auto& [symbol, ticks] : tick_data_) {
             engines_[symbol]       = std::make_shared<ExecutionEngine>(symbol, exec_config_);
             mms_[symbol]           = std::make_shared<MarketMaker>(mm_spread_, mm_levels_, mm_depth_, &order_pool_);
-            price_history_[symbol] = std::deque<double>();
+            price_history_[symbol] = {};
         }
 
         first_bar_timestamp_ = std::numeric_limits<int64_t>::max();
@@ -227,13 +228,15 @@ public:
 
     double get_total_pnl() const {
         double total = 0.0;
-        for (const auto& [symbol, engine] : engines_) total += engine->get_total_pnl();
+        for (const auto& [symbol, engine] : engines_)
+            total += engine->get_total_pnl();
         return total;
     }
 
     double get_total_fees() const {
         double total = 0.0;
-        for (const auto& [symbol, engine] : engines_) total += engine->get_total_fees();
+        for (const auto& [symbol, engine] : engines_)
+            total += engine->get_total_fees();
         return total;
     }
 
@@ -260,32 +263,31 @@ public:
     }
 
 private:
-    // Pools are declared first so they are destroyed last.
+    // Memory pools declared first, destroyed last, after all objects that
+    // allocate from them.
     std::pmr::unsynchronized_pool_resource order_pool_;
     std::pmr::unsynchronized_pool_resource event_pool_;
 
     EventQueue                eq_;
     std::shared_ptr<Strategy> strat_;
 
-    std::unordered_map<std::string, BarSeries>                         data_;
-    std::unordered_map<std::string, TickSeries>                        tick_data_;
-    std::unordered_map<std::string, std::shared_ptr<ExecutionEngine>>  engines_;
-    std::unordered_map<std::string, std::shared_ptr<MarketMaker>>      mms_;
-    std::unordered_map<std::string, double>                            last_px_;
-    std::unordered_map<std::string, std::deque<double>>                price_history_;
-    // Insertion order of add_data() calls, for deterministic signal processing.
-    std::vector<std::string>                symbol_order_;
-    std::unordered_map<std::string, size_t> symbol_order_index_;
-    // Last timestamp at which the market maker was refreshed per symbol.
-    std::unordered_map<std::string, int64_t> mm_last_refresh_;
+    std::unordered_map<std::string, BarSeries>                        data_;
+    std::unordered_map<std::string, TickSeries>                       tick_data_;
+    std::unordered_map<std::string, std::shared_ptr<ExecutionEngine>> engines_;
+    std::unordered_map<std::string, std::shared_ptr<MarketMaker>>     mms_;
+    std::unordered_map<std::string, double>                           last_px_;
+    std::unordered_map<std::string, std::deque<double>>               price_history_;
+    std::vector<std::string>                                          symbol_order_;
+    std::unordered_map<std::string, size_t>                           symbol_order_index_;
+    std::unordered_map<std::string, int64_t>                          mm_last_refresh_;
 
     double   init_cap_;
     double   curr_cap_;
     uint64_t next_oid_;
     bool     halted_;
 
-    PositionSizerPtr              sizer_;
-    std::shared_ptr<RiskManager>  risk_mgr_;
+    PositionSizerPtr                 sizer_;
+    std::shared_ptr<RiskManager>     risk_mgr_;
     std::shared_ptr<PortfolioContext> portfolio_;
 
     std::vector<double>  equity_;
@@ -295,24 +297,34 @@ private:
     double   mm_spread_;
     Quantity mm_depth_;
     int64_t  mm_refresh_interval_ns_;
+    int64_t  equity_snapshot_interval_ns_;
+    int64_t  last_equity_snapshot_ns_;
 
-    double          default_volatility_;
-    double          default_stop_distance_;
-    size_t          volatility_lookback_;
-    size_t          bars_per_year_;
-    int64_t         first_bar_timestamp_;
+    double  default_volatility_;
+    double  default_stop_distance_;
+    size_t  volatility_lookback_;
+    size_t  bars_per_year_;
+    int64_t first_bar_timestamp_;
+
     ExecutionConfig exec_config_;
 
-    // Interval for equity curve snapshots during tick runs.
-    // -1 means not yet initialised; 0 means snapshot every event.
-    int64_t equity_snapshot_interval_ns_ = 0;
-    int64_t last_equity_snapshot_ns_     = -1;
+    std::unordered_map<uint64_t, double> pending_buy_notional_;
+
+    // GFD order IDs awaiting end-of-day cancellation, keyed by symbol.
+    // Cancelled and cleared whenever the simulation crosses a UTC day boundary.
+    std::unordered_map<std::string, std::unordered_set<uint64_t>> gfd_orders_;
+
+    // UTC day number of the last processed market-data event.
+    // Computed as timestamp_ns / NS_PER_DAY. -1 before the first event.
+    int64_t last_event_day_;
 
     static constexpr size_t  PRICE_HISTORY_BUFFER = 10;
     static constexpr double  MIN_ORDER_QTY        = 1e-8;
+    static constexpr int64_t NS_PER_DAY           = 86'400LL * 1'000'000'000LL;
 
-    double  intrabar_cash_reserved_ = 0.0;
-    int64_t intrabar_timestamp_     = -1;
+    static int64_t to_unix_day(int64_t timestamp_ns) noexcept {
+        return timestamp_ns / NS_PER_DAY;
+    }
 
     template<typename T, typename... Args>
     std::shared_ptr<T> make_event(Args&&... args) {
@@ -321,24 +333,19 @@ private:
     }
 
     void load_data() {
-        // bar data
         for (const auto& [symbol, bars] : data_) {
             for (const auto& bar : bars) {
-                auto event = make_event<MarketDataEvent>(
+                eq_.push(make_event<MarketDataEvent>(
                     symbol, bar.timestamp_ns,
                     bar.open, bar.high, bar.low, bar.close, bar.volume
-                );
-                eq_.push(event);
+                ));
             }
         }
-
-        // tick data — each tick becomes a MarketDataEvent with open=high=low=close=price
         for (const auto& [symbol, ticks] : tick_data_) {
             for (const auto& tick : ticks) {
-                auto event = make_event<MarketDataEvent>(
+                eq_.push(make_event<MarketDataEvent>(
                     symbol, tick.timestamp_ns, tick.price, tick.quantity
-                );
-                eq_.push(event);
+                ));
             }
         }
     }
@@ -371,21 +378,18 @@ private:
         portfolio_->set_cash(curr_cap_ - total_position_value);
     }
 
-    // Snapshot equity at most once per equity_snapshot_interval_ns_.
-    // In bar mode (interval == 0) this reduces to the original one-per-bar logic:
-    // we only snapshot when all symbols for the current timestamp are processed.
     void maybe_snapshot_equity(int64_t timestamp) {
         if (equity_snapshot_interval_ns_ == 0) {
-            // original bar-mode behaviour: snapshot after the last symbol of each bar
-            bool is_last_md_for_bar = true;
+            // Bar mode: snapshot after the last symbol's event at this timestamp.
+            bool is_last = true;
             if (!eq_.empty()) {
                 auto next = eq_.peek();
                 if (next->get_type() == EventType::MARKET_DATA &&
                     next->get_timestamp() == timestamp) {
-                    is_last_md_for_bar = false;
+                    is_last = false;
                 }
             }
-            if (is_last_md_for_bar) {
+            if (is_last) {
                 equity_.push_back(curr_cap_);
                 timestamps_.push_back(timestamp);
                 risk_mgr_->set_capital(init_cap_, curr_cap_);
@@ -404,7 +408,8 @@ private:
 
     double calculate_volatility(const std::string& symbol) const {
         auto it = price_history_.find(symbol);
-        if (it == price_history_.end() || it->second.size() < 2) return default_volatility_;
+        if (it == price_history_.end() || it->second.size() < 2)
+            return default_volatility_;
 
         const auto& prices = it->second;
         size_t n = std::min(prices.size(), volatility_lookback_);
@@ -412,18 +417,18 @@ private:
 
         std::vector<double> returns;
         returns.reserve(n - 1);
-        size_t start_idx = prices.size() - n;
-        for (size_t i = start_idx + 1; i < prices.size(); ++i) {
+        size_t start = prices.size() - n;
+        for (size_t i = start + 1; i < prices.size(); ++i) {
             if (prices[i-1] <= 0.0 || prices[i] <= 0.0) continue;
             returns.push_back((prices[i] - prices[i-1]) / prices[i-1]);
         }
-
         if (returns.empty()) return default_volatility_;
 
         double mean   = std::accumulate(returns.begin(), returns.end(), 0.0) / returns.size();
         double sq_sum = 0.0;
         for (double r : returns) sq_sum += (r - mean) * (r - mean);
-        double vol = std::sqrt(sq_sum / returns.size()) * std::sqrt(static_cast<double>(bars_per_year_));
+        double vol = std::sqrt(sq_sum / returns.size())
+                   * std::sqrt(static_cast<double>(bars_per_year_));
         return std::max(0.001, std::min(1.0, vol));
     }
 
@@ -454,7 +459,6 @@ private:
         }
     }
 
-    // Returns true if the market maker should refresh its quotes for this symbol now.
     bool should_refresh_mm(const std::string& symbol, int64_t timestamp) {
         if (mm_refresh_interval_ns_ == 0) return true;
         auto it = mm_last_refresh_.find(symbol);
@@ -467,14 +471,29 @@ private:
     }
 
     void handle_md(EventPtr event) {
-        auto md      = std::static_pointer_cast<MarketDataEvent>(event);
-        auto symbol  = md->get_symbol();
+        auto md     = std::static_pointer_cast<MarketDataEvent>(event);
+        auto symbol = md->get_symbol();
         double price = md->get_close();
         last_px_[symbol] = price;
 
         auto& hist = price_history_[symbol];
         hist.push_back(price);
-        if (hist.size() > volatility_lookback_ + PRICE_HISTORY_BUFFER) hist.pop_front();
+        if (hist.size() > volatility_lookback_ + PRICE_HISTORY_BUFFER)
+            hist.pop_front();
+
+        // Cancel any outstanding GFD orders when the simulation crosses a UTC
+        int64_t event_day = to_unix_day(md->get_timestamp());
+        if (last_event_day_ >= 0 && event_day > last_event_day_) {
+            for (auto& [sym, ids] : gfd_orders_) {
+                auto ee_it = engines_.find(sym);
+                if (ee_it != engines_.end()) {
+                    for (uint64_t id : ids)
+                        ee_it->second->cancel_order(id);
+                }
+            }
+            gfd_orders_.clear();
+        }
+        last_event_day_ = event_day;
 
         auto ee_it = engines_.find(symbol);
         if (ee_it != engines_.end()) {
@@ -492,11 +511,12 @@ private:
                    const std::shared_ptr<SignalEvent>& b) {
                 auto ia = symbol_order_index_.find(a->get_symbol());
                 auto ib = symbol_order_index_.find(b->get_symbol());
-                size_t idx_a = ia != symbol_order_index_.end() ? ia->second : symbol_order_.size();
-                size_t idx_b = ib != symbol_order_index_.end() ? ib->second : symbol_order_.size();
+                size_t idx_a = (ia != symbol_order_index_.end()) ? ia->second : symbol_order_.size();
+                size_t idx_b = (ib != symbol_order_index_.end()) ? ib->second : symbol_order_.size();
                 return idx_a < idx_b;
             });
-        for (const auto& sig : signals) eq_.push(sig);
+        for (const auto& sig : signals)
+            eq_.push(sig);
     }
 
     void handle_sig(EventPtr event) {
@@ -525,17 +545,12 @@ private:
         double curr_pos      = ee_it->second->get_position();
         double portfolio_vol = calculate_volatility(sig->get_symbol());
 
+        double pending_notional = 0.0;
+        for (const auto& [id, notional] : pending_buy_notional_)
+            pending_notional += notional;
+        double available_cash = std::max(0.0, portfolio_->get_cash() - pending_notional);
+
         double target_pos = 0.0;
-
-        // Reset intrabar reservation on new bar timestamp.
-        if (sig->get_timestamp() != intrabar_timestamp_) {
-            intrabar_cash_reserved_ = 0.0;
-            intrabar_timestamp_     = sig->get_timestamp();
-        }
-
-        // Available cash accounts for notional already reserved by earlier
-        // signals on the same bar, preventing over-allocation.
-        double available_cash = std::max(0.0, portfolio_->get_cash() - intrabar_cash_reserved_);
 
         if (sig->get_signal_type() == SignalType::BUY) {
             if (curr_pos < 0.0) {
@@ -563,10 +578,6 @@ private:
         Side   ord_side = (delta > 0.0) ? Side::Buy : Side::Sell;
         double ord_qty  = std::abs(delta);
 
-        if (ord_side == Side::Buy) {
-            intrabar_cash_reserved_ += ord_qty * curr_px;
-        }
-
         double spread = mm_spread_;
         auto   mm_it  = mms_.find(sig->get_symbol());
         if (mm_it != mms_.end()) spread = mm_it->second->get_spread();
@@ -589,6 +600,11 @@ private:
             ord_qty, ord_px
         );
         ord->set_order_id(next_oid_++);
+
+        // Reserve the cash for this buy order until the fill settles.
+        if (ord_side == Side::Buy)
+            pending_buy_notional_[ord->get_order_id()] = ord_qty * curr_px;
+
         eq_.push(ord);
     }
 
@@ -599,8 +615,10 @@ private:
             throw std::runtime_error("No execution engine for symbol: " + ord->get_symbol());
 
         auto engine = it->second;
+
         if (ord->is_cancel()) {
             engine->cancel_order(ord->get_order_id());
+            pending_buy_notional_.erase(ord->get_order_id());
             return;
         }
 
@@ -612,8 +630,13 @@ private:
             ord->get_side(), px_cents, qty
         );
 
+        // Track GFD orders so they can be cancelled at the next day boundary.
+        if (ord->get_order_type() == OrderType::GoodForDay)
+            gfd_orders_[ord->get_symbol()].insert(ord->get_order_id());
+
         const double slippage_pct = engine->get_slippage_pct();
         auto trades = engine->execute_order(order);
+
         for (const auto& trade : trades) {
             const TradeInfo& our_trade = (ord->get_side() == Side::Buy)
                 ? trade.GetBidTrade()
@@ -624,34 +647,33 @@ private:
                 ? raw_price * (1.0 + slippage_pct)
                 : raw_price * (1.0 - slippage_pct);
 
-            // Mirror ExecutionEngine::calculate_fee — strategy orders are taker.
-            double commission = fill_price
-                                * our_trade.quantity_
-                                * exec_config_.taker_fee;
+            // Strategy orders are always takers, they cross the spread.
+            double commission = fill_price * our_trade.quantity_ * exec_config_.taker_fee;
 
-            auto fill = make_event<FillEvent>(
+            eq_.push(make_event<FillEvent>(
                 ord->get_symbol(), ord->get_timestamp(),
                 ord->get_order_id(), ord->get_side(),
-                our_trade.quantity_,
-                fill_price,
-                commission
-            );
-            eq_.push(fill);
+                our_trade.quantity_, fill_price, commission
+            ));
         }
     }
 
     void handle_fill(EventPtr event) {
-        auto fill  = std::static_pointer_cast<FillEvent>(event);
+        auto fill = std::static_pointer_cast<FillEvent>(event);
+
+        // Release the cash reservation held for this order.
+        if (fill->get_side() == Side::Buy)
+            pending_buy_notional_.erase(fill->get_order_id());
+
         auto ee_it = engines_.find(fill->get_symbol());
         if (ee_it != engines_.end()) {
             double new_pos = ee_it->second->get_position();
             strat_->set_position(fill->get_symbol(), new_pos);
             risk_mgr_->set_position(fill->get_symbol(), new_pos, fill->get_price());
         }
+
         strat_->on_fill(*fill);
     }
-
-    double calc_portfolio_val() const { return init_cap_ + get_total_pnl(); }
 };
 
 } // namespace quantcore
