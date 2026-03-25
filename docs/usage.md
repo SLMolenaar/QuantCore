@@ -1634,21 +1634,22 @@ if __name__ == '__main__':    # required on Windows
 
 Walk-forward analysis validates a strategy by repeatedly optimizing on an in-sample window and evaluating the best parameters on the following out-of-sample window. This guards against overfitting to a single historical period.
 
-> **Note:** `WalkForwardAnalyzer` currently supports single-asset data only. If you pass a multi-symbol dict, only the first symbol is used and a warning is raised.
+`WalkForwardAnalyzer` supports both single-asset and multi-asset data.
 
 ### WalkForwardAnalyzer
 
 ```python
 from quantcore.walk_forward import WalkForwardAnalyzer
-
-bars = qc.load_csv_data('data/aapl.csv', 'AAPL')
-data = {'AAPL': bars}  # single symbol only
-
+ 
+bars_aapl = qc.load_csv_data('data/aapl.csv', 'AAPL')
+bars_msft = qc.load_csv_data('data/msft.csv', 'MSFT')
+data = {'AAPL': bars_aapl, 'MSFT': bars_msft}
+ 
 param_grid = {
     'fast_period': [10, 20, 50],
     'slow_period': [50, 100, 200],
 }
-
+ 
 wfa = WalkForwardAnalyzer(
     strategy_factory=qc.SMACrossover,
     param_grid=param_grid,
@@ -1657,7 +1658,7 @@ wfa = WalkForwardAnalyzer(
     metric='sharpe_ratio',
     n_jobs=1,
 )
-
+ 
 result = wfa.analyze(data, initial_capital=100_000.0, verbose=True)
 print(result.summary())
 ```
@@ -1676,6 +1677,12 @@ OOS metrics in `out_of_sample_results` use **decimal format** for `total_return`
 
 The combined equity curve is continuous: each OOS segment is rescaled to begin from the end value of the previous segment, giving a smooth compounded curve across all windows.
 
+### Window construction for multi-asset data
+
+The first symbol in the data dict is used as the reference timeline. `train_size` and `test_size` are measured in bars of that reference series. Bars for all other symbols are selected by timestamp inclusion within `[window_start, window_end)`, so minor gaps in a secondary symbol do not corrupt the windows of the reference symbol.
+
+A window is skipped if any symbol ends up with zero bars in either its training or test period within that timestamp range. When all symbols are perfectly aligned (typical for daily data from a common source) this produces the same window count as a single-asset run.
+
 ### Plotting parameter stability
 
 ```python
@@ -1690,18 +1697,18 @@ This produces one subplot per parameter showing how the optimal value shifts acr
 ```python
 import numpy as np
 from quantcore.analytics import calculate_sharpe_ratio, calculate_returns
-
+ 
 all_bars   = qc.load_csv_data('data/aapl.csv', 'AAPL')
 n_bars     = len(all_bars)
 is_window  = 252
 oos_window = 63
-
+ 
 oos_sharpes = []
-
+ 
 for start in range(0, n_bars - is_window - oos_window, oos_window):
     is_bars  = all_bars[start : start + is_window]
     oos_bars = all_bars[start + is_window : start + is_window + oos_window]
-
+ 
     # In-sample optimization
     best_sharpe, best_params = -np.inf, (50, 200)
     for fast, slow in [(10, 50), (20, 100), (50, 200)]:
@@ -1713,7 +1720,7 @@ for start in range(0, n_bars - is_window - oos_window, oos_window):
         sr = calculate_sharpe_ratio(calculate_returns(eq))
         if sr > best_sharpe:
             best_sharpe, best_params = sr, (fast, slow)
-
+ 
     # Out-of-sample evaluation
     engine = qc.BacktestEngine(100_000.0)
     engine.add_data('AAPL', oos_bars)
@@ -1722,27 +1729,28 @@ for start in range(0, n_bars - is_window - oos_window, oos_window):
     eq     = np.array(engine.get_equity_curve())
     oos_sr = calculate_sharpe_ratio(calculate_returns(eq))
     oos_sharpes.append(oos_sr)
-
+ 
     print(f"Period {start}–{start+is_window+oos_window}: "
           f"best params={best_params}, OOS Sharpe={oos_sr:.2f}")
-
+ 
 print(f"\nMean OOS Sharpe: {np.mean(oos_sharpes):.2f}")
 ```
-
+ 
 ---
 
 ## 14. Monte Carlo Validation
 
 `monte_carlo_validation` stress-tests a strategy by running it on many resampled versions of the price series and returning the distribution of outcomes. This measures how sensitive the strategy's performance is to the specific sequence of returns in the historical data.
 
-> **Note:** `monte_carlo_validation` currently supports single-asset data only. If you pass a multi-symbol dict, only the first symbol is used and a warning is raised.
+`monte_carlo_validation` supports both single-asset and multi-asset data.
 
 ```python
 from quantcore.walk_forward import monte_carlo_validation
-
-bars = qc.load_csv_data('data/aapl.csv', 'AAPL')
-data = {'AAPL': bars}
-
+ 
+bars_aapl = qc.load_csv_data('data/aapl.csv', 'AAPL')
+bars_msft = qc.load_csv_data('data/msft.csv', 'MSFT')
+data = {'AAPL': bars_aapl, 'MSFT': bars_msft}
+ 
 mc_results = monte_carlo_validation(
     strategy_factory=qc.SMACrossover,
     params={'fast_period': 20, 'slow_period': 100},
@@ -1752,21 +1760,38 @@ mc_results = monte_carlo_validation(
     method='bootstrap',   # 'bootstrap' (resample bars with replacement) or 'shuffle' (randomly reorder bars)
     n_jobs=1,
 )
-
+ 
 import numpy as np
 sharpes   = mc_results['sharpe_ratios']  # np.ndarray
 returns   = mc_results['returns']        # np.ndarray, DECIMAL format (0.105 = 10.5%)
 drawdowns = mc_results['drawdowns']      # np.ndarray, DECIMAL format (-0.05 = -5%)
-
+ 
 print(f"Median Sharpe:   {np.median(sharpes):.2f}")
 print(f"5th pct Sharpe:  {np.percentile(sharpes, 5):.2f}")
 print(f"Median Return:   {np.median(returns):.2%}")
 print(f"Worst Drawdown:  {np.min(drawdowns):.2%}")
 ```
 
-`strategy_factory` must be picklable when `n_jobs != 1`. The same rules apply as for `GridSearchOptimizer`: pass a class or module-level function, not a lambda, and guard with `if __name__ == '__main__':` on Windows.
+### Multi-asset resampling
 
----
+For multi-asset data the same random return indices are applied to all symbols simultaneously. This synchronized resampling preserves the cross-asset correlation structure of the original data. Resampling each symbol independently would destroy those correlations and produce unrealistic scenarios that do not reflect how the assets actually co-move.
+
+All symbols must have the same number of bars. If they differ, `monte_carlo_validation` raises a `ValueError` naming each symbol and its bar count, and suggests aligning the series to a common date range before running:
+
+```python
+# Raises ValueError if bar counts differ across symbols:
+# "monte_carlo_validation requires all symbols to have the same number
+#  of bars for synchronized resampling. Got: AAPL: 252, MSFT: 248.
+#  Align your series to a common date range before running."
+mc_results = monte_carlo_validation(
+    strategy_factory=qc.SMACrossover,
+    params={'fast_period': 20, 'slow_period': 100},
+    data={'AAPL': bars_aapl, 'MSFT': bars_msft},  # must have equal length
+    n_simulations=1000,
+)
+```
+
+`strategy_factory` must be picklable when `n_jobs != 1`. The same rules apply as for `GridSearchOptimizer`: pass a class or module-level function, not a lambda, and guard with `if __name__ == '__main__':` on Windows.
 
 ## 15. Tick Data
 
