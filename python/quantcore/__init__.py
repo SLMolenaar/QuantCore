@@ -44,14 +44,13 @@ PairsTrading  = _core.PairsTrading
 BacktestEngine = _core.BacktestEngine
 
 PositionSizingContext = _core.PositionSizingContext
-# PositionSizer is the C++ abstract base class used by BacktestEngine.
-PositionSizer       = _core.PositionSizer
-FixedPercentage     = _core.FixedPercentage
-RiskBased           = _core.RiskBased
-KellyCriterion      = _core.KellyCriterion
-EqualWeight         = _core.EqualWeight
-VolatilityTargeting = _core.VolatilityTargeting
-FixedShares         = _core.FixedShares
+PositionSizer         = _core.PositionSizer
+FixedPercentage       = _core.FixedPercentage
+RiskBased             = _core.RiskBased
+KellyCriterion        = _core.KellyCriterion
+EqualWeight           = _core.EqualWeight
+VolatilityTargeting   = _core.VolatilityTargeting
+FixedShares           = _core.FixedShares
 
 RiskCheckResult   = _core.RiskCheckResult
 RiskCheckResponse = _core.RiskCheckResponse
@@ -67,14 +66,22 @@ version = _core.version
 # PYTHON HELPERS
 # ============================================================================
 
-# PositionCalculator and PortfolioPositionSizer are standalone Python utilities
-# for pre-trade sizing calculations. They are distinct from the C++ PositionSizer
-# hierarchy that BacktestEngine uses internally.
 from .position_sizing import PositionCalculator, PortfolioPositionSizer
 from .parquet_loader import ParquetDataLoader
 from .tick_parquet_loader import TickParquetLoader
 from .corporate_actions import CorporateActionsAdjuster, SplitEvent, DividendEvent
 from .calendar import TradingCalendar
+from .walk_forward import (
+    BacktestConfig,
+    GridSearchOptimizer,
+    WalkForwardAnalyzer,
+    WalkForwardResult,
+    OptimizationResult,
+    ParameterGrid,
+    monte_carlo_validation,
+    pct_to_decimal,
+    decimal_to_pct,
+)
 
 
 def load_parquet_data(
@@ -104,7 +111,6 @@ def load_parquet_data(
 
     Requires: pyarrow  (pip install pyarrow)
     """
-    # Calendar filtering requires BarData objects, not a raw numpy array.
     if calendar:
         bars = ParquetDataLoader.load(filepath, symbol)
         return TradingCalendar(calendar).filter_bars(bars)
@@ -256,7 +262,6 @@ def run_backtest(
     engine      = create_backtest(initial_capital, data, strategy)
     final_value = engine.run()
 
-    # Run the benchmark backtest when the caller requested one.
     benchmark_equity_curve = None
     if benchmark is not None or benchmark_strategy is not None:
         bm_data     = benchmark if benchmark is not None else data
@@ -387,10 +392,6 @@ class BacktestResults:
 
     @property
     def benchmark_metrics(self):
-        """
-        Benchmark-relative metrics. None if no benchmark equity curve was provided
-        or if compute() has not been called yet.
-        """
         if self._metrics is None:
             raise RuntimeError("Call .compute() first.")
         return self._benchmark_metrics
@@ -450,20 +451,27 @@ __all__ = [
     # Backtest
     'BacktestEngine', 'BacktestResults',
     'create_backtest', 'run_backtest', 'run_tick_backtest',
-    # C++ position sizing (used by BacktestEngine)
+    # C++ position sizing
     'PositionSizingContext', 'PositionSizer',
     'FixedPercentage', 'RiskBased', 'KellyCriterion',
     'EqualWeight', 'VolatilityTargeting', 'FixedShares',
-    # Python position sizing utilities (standalone helpers)
+    # Python position sizing utilities
     'PositionCalculator', 'PortfolioPositionSizer',
     # Risk management
     'RiskCheckResult', 'RiskCheckResponse', 'RiskLimits', 'RiskManager',
     # Portfolio context
     'PortfolioContext',
+    # Optimization and walk-forward
+    'BacktestConfig',
+    'GridSearchOptimizer', 'WalkForwardAnalyzer',
+    'WalkForwardResult', 'OptimizationResult', 'ParameterGrid',
+    'monte_carlo_validation',
+    'pct_to_decimal', 'decimal_to_pct',
     # Trading calendar
     'TradingCalendar',
-    # Utilities
-    'hello', 'version',
+    # Data utilities
     'ParquetDataLoader', 'load_parquet_data',
     'CorporateActionsAdjuster', 'SplitEvent', 'DividendEvent',
+    # C++ utilities
+    'hello', 'version',
 ]
