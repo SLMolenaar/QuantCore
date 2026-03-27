@@ -726,6 +726,8 @@ Fees and slippage are applied per fill. For a 100-share buy at $100 with `taker_
 
 ### Order types
 
+The following order types are available for strategies that place orders directly
+through the engine (e.g. via `BacktestEngine` with a custom execution flow):
 ```python
 qc.OrderType.GOOD_TILL_CANCEL    # Rests on the book until filled or canceled (default)
 qc.OrderType.MARKET              # Fills at best available price, no resting
@@ -733,6 +735,50 @@ qc.OrderType.IMMEDIATE_OR_CANCEL # Fills what it can immediately, cancels the re
 qc.OrderType.FILL_OR_KILL        # Fills entirely or not at all
 qc.OrderType.GOOD_FOR_DAY        # Canceled at end of session if unfilled
 ```
+
+`STOP` and `STOP_LIMIT` also appear in the `OrderType` enum but cannot be used by
+constructing an `OrderEvent` directly — doing so raises a `RuntimeError`. Use the
+strategy methods instead:
+```python
+# Sell stop: triggers a market fill when price falls to or below stop_price.
+# Protects a long position. Pass quantity=0.0 to close the full position.
+self.generate_stop(
+    symbol,
+    qc.Side.SELL,
+    stop_price=95.0,
+    quantity=0.0,
+    timestamp_ns=event.timestamp_ns,
+)
+
+# Sell stop-limit: converts to a GTC limit at limit_price when stop_price is touched.
+# Will not fill if the market gaps through limit_price.
+self.generate_stop_limit(
+    symbol,
+    qc.Side.SELL,
+    stop_price=95.0,
+    limit_price=94.50,
+    quantity=0.0,
+    timestamp_ns=event.timestamp_ns,
+)
+```
+
+Stop orders are typically placed from `on_fill` after an entry is confirmed:
+```python
+def on_fill(self, fill):
+    if fill.side == qc.Side.BUY:
+        stop = fill.price * 0.98          # 2% stop below entry
+        self.generate_stop(
+            fill.symbol,
+            qc.Side.SELL,
+            stop_price=stop,
+            quantity=0.0,                 # close full position on trigger
+            timestamp_ns=fill.timestamp_ns,
+        )
+```
+
+Use `generate_stop` when guaranteed execution matters more than price. Use
+`generate_stop_limit` when you need price control but can accept the risk of not
+filling if the market gaps.
 
 ### ExecutionEngine (per-symbol access)
 

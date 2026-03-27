@@ -115,7 +115,7 @@ def bench_quantcore(data: np.ndarray, n_runs: int) -> tuple[float, float]:
         times.append(n_bars / (t1 - t0))
 
     if not times:
-        print("  [FAIL] All runs hit the wash trade bug. Lower --bars or fix QuantCore.")
+        print("  [FAIL] All runs hit the wash trade bug. Lower --bars.")
         return 0.0, 0.0
 
     return float(np.mean(times)), float(np.std(times))
