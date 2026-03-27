@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(QuantCore VERSION 0.2.4 LANGUAGES CXX)
+project(QuantCore VERSION 0.2.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,35 +20,25 @@ else()
     add_compile_options($<$<CONFIG:Debug>:-g> $<$<CONFIG:Debug>:-O0>)
 endif()
 
-option(BUILD_TESTS "Build tests" ON)
-option(BUILD_PYTHON_BINDINGS "Build Python bindings" OFF)
+option(BUILD_TESTS           "Build tests"                  ON)
+option(BUILD_PYTHON_BINDINGS "Build Python bindings"        OFF)
+option(BUILD_EXAMPLES        "Build example main executable" OFF)
 
 include_directories(
         ${PROJECT_SOURCE_DIR}/cpp
         ${PROJECT_SOURCE_DIR}/cpp/orderbook
 )
 
-file(GLOB CPP_SOURCES ${PROJECT_SOURCE_DIR}/cpp/*.cpp)
+if(BUILD_EXAMPLES)
+    add_executable(QuantCore cpp/main.cpp)
 
-add_executable(QuantCore ${CPP_SOURCES}
-        cpp/backtesting/event.h
-        cpp/backtesting/event_queue.h
-        cpp/backtesting/market_data_event.h
-        cpp/backtesting/signal_event.h
-        cpp/backtesting/order_event.h
-        cpp/backtesting/fill_event.h
-        cpp/backtesting/bar_data.h
-        cpp/backtesting/tick_data.h
-        cpp/backtesting/tick_data_loader.h
-        cpp/backtesting/data_loader.h
-        cpp/backtesting/strategy.h
-        cpp/backtesting/backtest_engine.h
-        cpp/strategies/buy_and_hold.h
-        cpp/strategies/sma_crossover.h
-        cpp/strategies/mean_reversion.h
-        cpp/backtesting/market_maker.h
-        cpp/backtesting/position_sizer.h
-)
+    target_include_directories(QuantCore PRIVATE
+            ${PROJECT_SOURCE_DIR}/cpp
+            ${PROJECT_SOURCE_DIR}/cpp/orderbook
+    )
+
+    message(STATUS "Build examples: ON (requires data/ CSVs at runtime)")
+endif()
 
 if(BUILD_TESTS)
     enable_testing()
@@ -121,3 +111,4 @@ endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Build tests: ${BUILD_TESTS}")
+message(STATUS "Build examples: ${BUILD_EXAMPLES}")

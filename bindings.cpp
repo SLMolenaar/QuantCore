@@ -541,7 +541,7 @@ Use generate_stop() when guaranteed execution matters more than price.
     // ============================================================================
 
     m.def("hello",   []() { return "Hello from QuantCore C++!"; });
-    m.def("version", []() { return "0.2.4"; });
+    m.def("version", []() { return "0.2.5"; });
 
-    m.attr("__version__") = "0.2.4";
+    m.attr("__version__") = "0.2.5";
 }
