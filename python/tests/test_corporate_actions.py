@@ -100,7 +100,7 @@ class TestInitialization:
 
 
 # ============================================================================
-# SPLIT ADJUSTMENT — PRICE
+# SPLIT ADJUSTMENT; PRICE
 # ============================================================================
 
 class TestSplitPrice:
@@ -169,7 +169,7 @@ class TestSplitPrice:
         assert result[0].close == pytest.approx(52.5)
 
     def test_split_on_last_bar_adjusts_all_bars(self):
-        # ex_date is after the last bar — all bars are pre-split
+        # ex_date is after the last bar, all bars are pre-split
         bars = make_bars([100.0, 110.0, 120.0], base_ts=0)
         adjuster = CorporateActionsAdjuster()
         adjuster.add_split(ex_date_ns=100 * SEC, ratio=2.0)
@@ -180,7 +180,7 @@ class TestSplitPrice:
         assert result[2].close == pytest.approx(60.0)
 
     def test_split_before_first_bar_adjusts_nothing(self):
-        # ex_date is before or at the first bar — no bars are pre-split
+        # ex_date is before or at the first bar, no bars are pre-split
         bars = make_bars([100.0, 110.0, 120.0], base_ts=10 * SEC)
         adjuster = CorporateActionsAdjuster()
         adjuster.add_split(ex_date_ns=5 * SEC, ratio=2.0)
@@ -192,7 +192,7 @@ class TestSplitPrice:
 
 
 # ============================================================================
-# SPLIT ADJUSTMENT — VOLUME
+# SPLIT ADJUSTMENT; VOLUME
 # ============================================================================
 
 class TestSplitVolume:
@@ -343,7 +343,7 @@ class TestMultipleEvents:
         assert result[5].close == pytest.approx(112.0)
 
     def test_events_applied_regardless_of_registration_order(self):
-        # Register events in reverse chronological order — result must be the same.
+        # Register events in reverse chronological order, result must be the same.
         bars = make_bars([400.0, 200.0, 100.0, 105.0], base_ts=0)
 
         adjuster_forward = CorporateActionsAdjuster()
@@ -361,7 +361,7 @@ class TestMultipleEvents:
 
     def test_two_dividends_compound_correctly(self):
         # Dividend $1 at ts=2 (bar before = bar at ts=1, close=100), factor1 = 0.99
-        # Dividend $2 at ts=4 (bar before = bar at ts=3, close=99.0 — unadjusted)
+        # Dividend $2 at ts=4 (bar before = bar at ts=3, close=99.0, unadjusted)
         #   factor2 = (99 - 2) / 99
         # bars 0,1 receive both factors; bars 2,3 receive only factor2; bars 4,5 unchanged
         bars = make_bars([99.0, 100.0, 99.0, 99.0, 97.0, 98.0], base_ts=0)
@@ -384,7 +384,7 @@ class TestMultipleEvents:
         assert result[5].close == pytest.approx(98.0)
 
 # ============================================================================
-# REAL-WORLD SCENARIO — AAPL 7-FOR-1 SPLIT
+# REAL-WORLD SCENARIO; AAPL 7-FOR-1 SPLIT
 # ============================================================================
 
 class TestAppleSplitScenario:

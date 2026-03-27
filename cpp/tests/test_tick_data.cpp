@@ -97,7 +97,7 @@ TEST(TickDataLoader, AggregateSingleBar) {
 
 TEST(TickDataLoader, AggregateMultipleBars) {
     int64_t bar_dur  = 60'000'000'000LL;
-    int64_t tick_gap = 20'000'000'000LL; // 20s apart — 3 ticks per bar
+    int64_t tick_gap = 20'000'000'000LL; // 20s apart, 3 ticks per bar
 
     auto ticks = make_ticks("MSFT", 0, tick_gap,
                             {10, 12, 11,   // bar 0
@@ -280,7 +280,7 @@ TEST(BacktestEngine, EquitySnapshotIntervalReducesSnapshots) {
 
     engine.add_tick_data("X", ticks);
     engine.set_strategy(strat);
-    // snapshot every 10 seconds — should get ~10 snapshots instead of 100
+    // snapshot every 10 seconds, should get ~10 snapshots instead of 100
     engine.set_equity_snapshot_interval(10'000'000'000LL);
     engine.run();
 

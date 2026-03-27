@@ -18,9 +18,6 @@ struct ExchangeRules {
 
     bool IsValidQuantity(Quantity quantity) const {
         if (quantity < minQuantity || quantity > maxQuantity) return false;
-        // Lot size enforcement via fmod — works correctly for double Quantity.
-        // A lotSize of 1.0 (default) passes everything since fmod(x, 1.0) == 0
-        // for all whole numbers, and fractional shares are multiples of 1e-8.
         if (lotSize > 1.0 + 1e-9) {
             return std::fmod(quantity, lotSize) < 1e-9;
         }
@@ -44,7 +41,6 @@ struct ExchangeRules {
     }
 
     Quantity RoundToLot(Quantity quantity) const {
-        // No rounding — fractional shares are supported
         return quantity;
     }
 };

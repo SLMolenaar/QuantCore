@@ -307,8 +307,8 @@ class TestWeekendFiltering:
             (2023, 1, 11),  # Wed
             (2023, 1, 12),  # Thu
             (2023, 1, 13),  # Fri
-            (2023, 1, 14),  # Sat — filtered
-            (2023, 1, 15),  # Sun — filtered
+            (2023, 1, 14),  # Sat,filtered
+            (2023, 1, 15),  # Sun, filtered
         ]
         cal  = TradingCalendar("NYSE")
         bars = make_bars(dates)
@@ -366,10 +366,10 @@ class TestFilterBehaviour:
         # 4 bars: 3 weekends/holidays + 1 valid → 75% removed > 20% threshold.
         cal = TradingCalendar("NYSE")
         bars = make_bars([
-            (2023, 1, 2),   # observed New Year's — holiday
+            (2023, 1, 2),   # observed New Year's, holiday
             (2023, 1, 7),   # Saturday
             (2023, 1, 8),   # Sunday
-            (2023, 1, 9),   # Monday — valid
+            (2023, 1, 9),   # Monday, valid
         ])
         with pytest.raises(RuntimeError):
             cal.filter_bars(bars, strict=True, max_skip_pct=0.20)
@@ -378,7 +378,7 @@ class TestFilterBehaviour:
         # 5 bars: 1 weekend + 4 valid → 20% removed == threshold (not above).
         cal = TradingCalendar("NYSE")
         bars = make_bars([
-            (2023, 1, 7),   # Saturday — filtered
+            (2023, 1, 7),   # Saturday, filtered
             (2023, 1, 9),   # Mon
             (2023, 1, 10),  # Tue
             (2023, 1, 11),  # Wed
@@ -509,7 +509,7 @@ class TestMultiExchange:
         # NYSE stays open; some European exchanges close.
         nyse_cal = TradingCalendar("NYSE")
         bars     = make_bars([(2023, 11, 10)])
-        # NYSE is open on Veterans Day — bar should not be filtered.
+        # NYSE is open on Veterans Day, bar should not be filtered.
         nyse_result = nyse_cal.filter_bars(bars)
         assert len(nyse_result) == 1
 
@@ -530,9 +530,9 @@ class TestPublicAPIIntegration:
         # the surrounding trading days. The holiday bar should be removed before
         # the backtest runs, so the strategy sees one fewer bar.
         dates_with_holiday = [
-            (2023, 12, 22),  # Friday — trading
-            (2023, 12, 25),  # Monday — Christmas, filtered
-            (2023, 12, 26),  # Tuesday — trading
+            (2023, 12, 22),  # Friday, trading
+            (2023, 12, 25),  # Monday, Christmas, filtered
+            (2023, 12, 26),  # Tuesday, trading
         ]
         dates_without_holiday = [
             (2023, 12, 22),
@@ -582,7 +582,7 @@ class TestPublicAPIIntegration:
         # Both symbols must have the holiday bar removed.
         holiday_and_two_valid = [
             (2023, 12, 22),  # valid
-            (2023, 12, 25),  # Christmas — filtered
+            (2023, 12, 25),  # Christmas, filtered
             (2023, 12, 26),  # valid
         ]
 

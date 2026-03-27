@@ -19,7 +19,7 @@ struct NewOrderMessage {
     OrderId     orderId;
     Side        side;
     Price       price;
-    Quantity    quantity;   // double — fractional shares supported
+    Quantity    quantity;
     OrderType   orderType;
     std::chrono::system_clock::time_point timestamp;
 };
@@ -35,7 +35,7 @@ struct ModifyOrderMessage {
     OrderId     orderId;
     Side        side;
     Price       newPrice;
-    Quantity    newQuantity;   // double — fractional shares supported
+    Quantity    newQuantity;
     std::chrono::system_clock::time_point timestamp;
 };
 
@@ -44,13 +44,13 @@ struct TradeMessage {
     OrderId     buyOrderId;
     OrderId     sellOrderId;
     Price       price;
-    Quantity    quantity;   // double — fractional shares supported
+    Quantity    quantity;
     std::chrono::system_clock::time_point timestamp;
 };
 
 struct SnapshotLevel {
     Price    price;
-    Quantity quantity;    // double — fractional shares supported
+    Quantity quantity;
     int      orderCount;  // number of orders at this level
 };
 

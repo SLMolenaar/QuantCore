@@ -134,7 +134,6 @@ private:
         std::uniform_real_distribution<double> dist(0.9, 1.1);
         raw_quantity *= dist(rng_);
 
-        // Return as-is — fractional quantities are supported
         return std::max(1e-8, raw_quantity);
     }
 

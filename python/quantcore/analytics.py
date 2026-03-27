@@ -147,7 +147,7 @@ class BenchmarkMetrics:
     benchmark_annualized_return : annualized benchmark return (%)
     active_return               : annualized strategy return minus annualized
                                   benchmark return (%)
-    alpha                       : CAPM alpha — annualized excess return after
+    alpha                       : CAPM alpha; annualized excess return after
                                   removing the portion explained by beta (%)
     beta                        : slope of strategy returns regressed on benchmark
                                   returns; 1.0 means the strategy moves in lock-step
@@ -215,7 +215,7 @@ def calculate_benchmark_metrics(
     Calculate benchmark-relative performance metrics.
 
     Both arrays must be period returns (output of calculate_returns), not
-    equity curves. They must have the same length — align them on a common
+    equity curves. They must have the same length; align them on a common
     timestamp index before calling this function if the two backtests
     produced different-length equity curves.
 
@@ -304,7 +304,7 @@ def calculate_benchmark_metrics(
     tracking_error = float(np.std(active_returns, ddof=1)) * np.sqrt(periods_per_year) * 100.0
 
     # ---- information ratio ----
-    # IR = mean(active_returns) / std(active_returns) — not annualised separately
+    # IR = mean(active_returns) / std(active_returns); not annualised separately
     # because both numerator and denominator scale the same way with period length.
     if tracking_error > 1e-10:
         # tracking_error is already annualised (%), so annualise the numerator too
@@ -449,7 +449,7 @@ def calculate_sortino_ratio(
         periods_per_year: int = 252
 ) -> float:
     """
-    Sortino ratio — uses downside deviation instead of total volatility.
+    Sortino ratio; uses downside deviation instead of total volatility.
 
     Returns 0.0 when std is effectively zero (see calculate_sharpe_ratio).
     """
@@ -724,7 +724,7 @@ def rolling_volatility(
     Rolling annualized volatility (%).
 
     Windows that are entirely flat (all returns zero) produce 0.0, which is
-    technically correct — there is no volatility — but callers should be aware
+    technically correct, there is no volatility, but callers should be aware
     that this can look like artificially smooth periods on tick/minute data.
     """
     if len(returns) < window:

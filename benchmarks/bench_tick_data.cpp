@@ -200,7 +200,7 @@ static void bench_mm_throttle()
 }
 
 // ============================================================================
-// 3. Aggregation throughput — ticks/s for aggregate_to_bars
+// 3. Aggregation throughput, ticks/s for aggregate_to_bars
 // ============================================================================
 
 static void bench_aggregation()
@@ -243,7 +243,7 @@ static void bench_aggregation()
 }
 
 // ============================================================================
-// 4. Tick vs bar — equivalent dataset comparison
+// 4. Tick vs bar, equivalent dataset comparison
 // ============================================================================
 
 static void bench_tick_vs_bar()

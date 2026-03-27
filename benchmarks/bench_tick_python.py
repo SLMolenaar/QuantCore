@@ -3,14 +3,6 @@ benchmarks/bench_tick_python.py
 ================================
 Python-layer benchmarks for QuantCore tick data support.
 
-Sections:
-  1. Tick throughput      — engine.run() ticks/s via pybind11
-  2. MM throttle          — throughput vs market-maker refresh interval
-  3. Aggregation          — ticks/s for aggregate_to_bars
-  4. Tick vs bar          — equivalent dataset comparison
-  5. Equity snapshot cost — throughput vs snapshot interval
-  6. Numpy add_tick_data  — List[TickData] vs (N,4) numpy array
-
 Run from the project root after building the extension:
     python python/build_module.py
     python benchmarks/bench_tick_python.py
@@ -131,7 +123,7 @@ def section(title: str) -> None:
 # ============================================================================
 
 def bench_tick_throughput():
-    section("1. Tick Throughput — single asset (BuyAndHold)")
+    section("1. Tick Throughput, single asset (BuyAndHold)")
 
     fmt = f"  {{:<34}} {{:>10}}  {{:>14}}  {{:>10}}"
     print(fmt.format("Scenario", "Ticks", "Ticks/s", "p50 (ms)"))
@@ -166,7 +158,7 @@ def bench_tick_throughput():
 # ============================================================================
 
 def bench_mm_throttle():
-    section("2. Market Maker Throttle — 10K ticks, varying refresh interval")
+    section("2. Market Maker Throttle; 10K ticks, varying refresh interval")
 
     n     = 10_000
     ticks = make_ticks("ASSET", n, 100_000_000)  # 100ms ticks
@@ -204,7 +196,7 @@ def bench_mm_throttle():
 # ============================================================================
 
 def bench_aggregation():
-    section("3. Aggregation Throughput — aggregate_to_bars")
+    section("3. Aggregation Throughput; aggregate_to_bars")
 
     n     = 1_000_000
     ticks = make_ticks("ASSET", n, 1_000_000_000)
@@ -235,11 +227,11 @@ def bench_aggregation():
 
 
 # ============================================================================
-# 4. Tick vs bar — equivalent dataset
+# 4. Tick vs bar; equivalent dataset
 # ============================================================================
 
 def bench_tick_vs_bar():
-    section("4. Tick vs Bar — equivalent dataset, BuyAndHold")
+    section("4. Tick vs Bar, equivalent dataset, BuyAndHold")
     print("  252 daily bars  vs  252 * N ticks over the same period")
     print()
 
@@ -289,7 +281,7 @@ def bench_tick_vs_bar():
 # ============================================================================
 
 def bench_snapshot_cost():
-    section("5. Equity Snapshot Cost — 10K ticks")
+    section("5. Equity Snapshot Cost; 10K ticks")
 
     n     = 10_000
     ticks = make_ticks("ASSET", n, 1_000_000_000)  # 1s ticks
@@ -330,7 +322,7 @@ def bench_snapshot_cost():
 # ============================================================================
 
 def bench_numpy_add_tick_data():
-    section("6. add_tick_data — numpy array vs List[TickData]")
+    section("6. add_tick_data; numpy array vs List[TickData]")
 
     print("  Measures the cost of loading tick data into the engine before run().")
     print("  List[TickData] path: N individual pybind11 object crossings.")
@@ -373,11 +365,11 @@ def bench_numpy_add_tick_data():
 
         speedup = p50_list / p50_numpy if p50_numpy > 0 else 0.0
 
-        print(fmt.format(f"List[TickData] — {label} ticks", n,
+        print(fmt.format(f"List[TickData]; {label} ticks", n,
                          f"{n / p50_list:>14,.0f}",
                          f"{p50_list * 1000:>10.2f}",
                          f"{p99_list * 1000:>10.2f}"))
-        print(fmt.format(f"numpy (N,4)    — {label} ticks", n,
+        print(fmt.format(f"numpy (N,4); {label} ticks", n,
                          f"{n / p50_numpy:>14,.0f}",
                          f"{p50_numpy * 1000:>10.2f}",
                          f"{p99_numpy * 1000:>10.2f}"))
@@ -392,7 +384,7 @@ def bench_numpy_add_tick_data():
 if __name__ == "__main__":
     print()
     sep("=")
-    print("  QuantCore — Tick Data Python Benchmarks")
+    print("  QuantCore; Tick Data Python Benchmarks")
     sep("=")
     print()
 

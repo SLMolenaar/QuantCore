@@ -25,7 +25,7 @@ struct StopOrder {
     double      limit_price; // limit price for StopLimit; 0.0 for Stop
 };
 
-// Base for trading strategies — override on_data() to implement your logic.
+// Base for trading strategies; override on_data() to implement your logic.
 class Strategy {
 public:
     Strategy(const std::string& name = "Strategy") : name_(name), portfolio_(nullptr) {}

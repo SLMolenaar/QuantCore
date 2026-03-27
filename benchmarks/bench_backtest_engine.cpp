@@ -154,7 +154,7 @@ static void print_row(const std::string& label,
 }
 
 // ============================================================================
-// 1. Throughput — single asset
+// 1. Throughput, single asset
 // ============================================================================
 
 static void bench_throughput()
@@ -175,7 +175,7 @@ static void bench_throughput()
 }
 
 // ============================================================================
-// 2. Strategy comparison — 5 years, 1 asset
+// 2. Strategy comparison, 5 years, 1 asset
 // ============================================================================
 
 static void bench_strategies()
@@ -200,7 +200,7 @@ static void bench_strategies()
 }
 
 // ============================================================================
-// 3. Multi-asset scaling — 5 years
+// 3. Multi-asset scaling, 5 years
 // ============================================================================
 
 static void bench_multi_asset()
@@ -225,7 +225,7 @@ static void bench_multi_asset()
 }
 
 // ============================================================================
-// 4. Order book isolation — raw AddOrder / CancelOrder
+// 4. Order book isolation, raw AddOrder / CancelOrder
 // ============================================================================
 
 static void bench_orderbook()
@@ -271,7 +271,7 @@ static void bench_orderbook()
                 OrderType::GoodTillCancel,
                 static_cast<OrderId>(2'000'000 + i * 2),
                 Side::Sell, 10000, 1));
-            // aggressive buy — matches and clears
+            // aggressive buy, matches and clears
             ob.AddOrder(std::make_shared<Order>(
                 OrderType::GoodTillCancel,
                 static_cast<OrderId>(2'000'000 + i * 2 + 1),
@@ -283,7 +283,7 @@ static void bench_orderbook()
 }
 
 // ============================================================================
-// 5. Latency distribution — 1-year run, 100 samples
+// 5. Latency distribution, 1-year run, 100 samples
 // ============================================================================
 
 static void bench_latency()
@@ -318,7 +318,7 @@ static void bench_latency()
 }
 
 // ============================================================================
-// 6. Memory stability — 1000-year run
+// 6. Memory stability; 1000-year run
 // ============================================================================
 
 static void bench_memory()

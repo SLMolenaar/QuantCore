@@ -411,7 +411,6 @@ class BacktestResults:
             ]
 
         if self._metrics is None:
-            # compute() has not been called yet — hint at what's available
             if self.benchmark_equity_curve is not None:
                 lines += [
                     "",

@@ -366,7 +366,7 @@ def plot_returns_distribution(
 
     if zero_fraction > 0.05:
         ax1.annotate(
-            f"{zero_fraction * 100:.0f}% of periods excluded\n(flat equity — no open position)",
+            f"{zero_fraction * 100:.0f}% of periods excluded\n(flat equity, no open position)",
             xy=(0.97, 0.97), xycoords='axes fraction',
             ha='right', va='top', fontsize=9,
             bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', alpha=0.8),

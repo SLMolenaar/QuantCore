@@ -281,7 +281,7 @@ class TestOptimizationResult:
 
 
 # ============================================================================
-# WALK-FORWARD ANALYSER — SINGLE-ASSET REGRESSION
+# WALK-FORWARD ANALYSER; SINGLE-ASSET REGRESSION
 # ============================================================================
 
 class TestWalkForwardAnalyzerSingleAsset:
@@ -334,7 +334,7 @@ class TestWalkForwardAnalyzerSingleAsset:
 
 
 # ============================================================================
-# WALK-FORWARD ANALYSER — MULTI-ASSET
+# WALK-FORWARD ANALYSER; MULTI-ASSET
 # ============================================================================
 
 class TestWalkForwardAnalyzerMultiAsset:
@@ -393,7 +393,7 @@ class TestWalkForwardAnalyzerMultiAsset:
 
 
 # ============================================================================
-# MONTE CARLO VALIDATION — SINGLE ASSET
+# MONTE CARLO VALIDATION; SINGLE ASSET
 # ============================================================================
 
 class TestMonteCarloSingleAsset:
@@ -459,7 +459,7 @@ class TestMonteCarloSingleAsset:
 
 
 # ============================================================================
-# MONTE CARLO VALIDATION — MULTI-ASSET
+# MONTE CARLO VALIDATION; MULTI-ASSET
 # ============================================================================
 
 class TestMonteCarloMultiAsset:
@@ -551,7 +551,7 @@ class TestMonteCarloMultiAsset:
 
 
 # ============================================================================
-# GRID SEARCH OPTIMIZER — MULTI-ASSET SMOKE TEST
+# GRID SEARCH OPTIMIZER; MULTI-ASSET SMOKE TEST
 # ============================================================================
 
 class TestGridSearchOptimizerMultiAsset:

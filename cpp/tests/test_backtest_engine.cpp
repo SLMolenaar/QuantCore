@@ -262,7 +262,7 @@ TEST_F(BacktestEngineTest, FlatMarketPnlIsNegativeFees) {
     EXPECT_GT(total_fees, 0.0);
     // PnL must be negative (execution costs in a flat market)
     EXPECT_LT(total_pnl, 0.0);
-    // PnL cannot be better than just fees — slippage makes it worse
+    // PnL cannot be better than just fees, slippage makes it worse
     EXPECT_LE(total_pnl, -total_fees);
     // PnL should not be astronomically worse than fees (sanity bound)
     EXPECT_GE(total_pnl, -total_fees * 10.0);
@@ -359,7 +359,7 @@ TEST_F(BacktestEngineTest, HigherPriceAssetGeneratesMoreAbsolutePnl) {
     engine_exp.run();
 
     // Both should be profitable with same % allocation; expensive asset has same PnL
-    // because FixedPercentage allocates proportionally — roughly equal dollar PnL
+    // because FixedPercentage allocates proportionally, roughly equal dollar PnL
     EXPECT_GT(engine_cheap.get_total_pnl(), 0.0);
     EXPECT_GT(engine_exp.get_total_pnl(), 0.0);
 }
@@ -449,7 +449,7 @@ TEST_F(BacktestEngineTest, MultiAssetBothGetPositions) {
 }
 
 TEST_F(BacktestEngineTest, MultiAssetPnlSignsReflectMarketDirection) {
-    // AAPL goes up, GOOGL goes down — both should have correct PnL sign.
+    // AAPL goes up, GOOGL goes down, both should have correct PnL sign.
     BarSeries bars_up   = create_uptrend_bars(50, 100.0, 0.5, "AAPL");
     BarSeries bars_down = create_downtrend_bars(50, 200.0, 0.5, "GOOGL");
 
@@ -622,7 +622,7 @@ TEST_F(BacktestEngineTest, BuyAndHoldOpensPositionOnFirstBar) {
 
     auto exec = engine_->get_execution_engine("TEST");
     ASSERT_NE(exec, nullptr);
-    // Must have a position — BuyAndHold buys once on the first bar
+    // Must have a position, BuyAndHold buys once on the first bar
     EXPECT_GT(std::abs(exec->get_position()), 0.0);
 }
 
@@ -658,13 +658,13 @@ TEST_F(BacktestEngineTest, SMACrossoverTradesAfterWarmup) {
     // then rises → fast crosses back above slow, triggering a BUY signal.
     BarSeries bars;
     const int slow = 50;
-    // Phase 1: downtrend — fast SMA drops below slow SMA
+    // Phase 1: downtrend; fast SMA drops below slow SMA
     for (int i = 0; i < slow + 10; ++i) {
         double price = 200.0 - i * 1.0;
         bars.push_back(BarData("TEST", static_cast<int64_t>(i) * 1'000'000'000LL,
                                price, price + 1.0, price - 1.0, price, 1'000'000.0));
     }
-    // Phase 2: sharp uptrend — fast SMA crosses back above slow SMA
+    // Phase 2: sharp uptrend; fast SMA crosses back above slow SMA
     int offset = static_cast<int>(bars.size());
     for (int i = 0; i < slow + 10; ++i) {
         double price = bars.back().close + i * 2.0;
@@ -795,7 +795,7 @@ TEST_F(BacktestEngineTest, EquityNeverNegative) {
 }
 
 TEST_F(BacktestEngineTest, SimultaneousSameTimestampBarsHandled) {
-    // Both symbols share identical timestamps — event ordering must not break.
+    // Both symbols share identical timestamps, event ordering must not break.
     BarSeries bars1, bars2;
     for (int i = 0; i < 20; ++i) {
         int64_t ts = static_cast<int64_t>(i) * 1'000'000'000LL;

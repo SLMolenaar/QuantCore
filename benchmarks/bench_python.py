@@ -4,9 +4,9 @@ benchmarks/bench_python.py
 Python-layer benchmarks for QuantCore.
 
 Sections:
-  1. Bindings throughput  — engine.run() latency via pybind11
-  2. Grid search speedup  — sequential vs parallel (n_jobs 1/2/4/-1)
-  3. CSV data loading     — bars/s from disk
+  1. Bindings throughput, engine.run() latency via pybind11
+  2. Grid search speedup, sequential vs parallel (n_jobs 1/2/4/-1)
+  3. CSV data loading, bars/s from disk
 
 Run from the project root after building the extension:
     python python/build_module.py
@@ -59,7 +59,7 @@ def make_bars(symbol: str, n: int, start_price: float = 100.0) -> list:
 def make_bars_numpy(n: int, start_price: float = 100.0) -> np.ndarray:
     """
     Build bar data as a (N, 6) float64 array: [timestamp_ns, open, high, low, close, volume].
-    Used with the numpy overload of add_data — one boundary crossing instead of N.
+    Used with the numpy overload of add_data, one boundary crossing instead of N.
     timestamp_ns fits in float64 exactly here (starts near 0 to avoid precision loss).
     """
     arr = np.empty((n, 6), dtype=np.float64)
@@ -134,12 +134,12 @@ def bench_bindings():
     sep()
 
     configs = [
-        ("BuyAndHold — 1 yr",    252,     lambda: qc.BuyAndHold(),               1),
-        ("BuyAndHold — 5 yr",    1_260,   lambda: qc.BuyAndHold(),               1),
-        ("BuyAndHold — 10 yr",   2_520,   lambda: qc.BuyAndHold(),               1),
-        ("SMAXover(20/100) — 5yr", 1_260, lambda: qc.SMACrossover(20, 100),      1),
-        ("MeanRev(20,1.5) — 5yr", 1_260,  lambda: qc.MeanReversion(20, 1.5, 0.5), 1),
-        ("BuyAndHold — 10 sym",  1_260,   lambda: qc.BuyAndHold(),               10),
+        ("BuyAndHold: 1 yr",    252,     lambda: qc.BuyAndHold(),               1),
+        ("BuyAndHold: 5 yr",    1_260,   lambda: qc.BuyAndHold(),               1),
+        ("BuyAndHold: 10 yr",   2_520,   lambda: qc.BuyAndHold(),               1),
+        ("SMAXover(20/100): 5yr", 1_260, lambda: qc.SMACrossover(20, 100),      1),
+        ("MeanRev(20,1.5): 5yr", 1_260,  lambda: qc.MeanReversion(20, 1.5, 0.5), 1),
+        ("BuyAndHold: 10 sym",  1_260,   lambda: qc.BuyAndHold(),               10),
     ]
 
     for label, n_bars, strat_fn, n_syms in configs:
@@ -172,18 +172,18 @@ def bench_bindings():
 # ============================================================================
 
 def bench_parallel():
-    section("2. Grid Search — Sequential vs Parallel")
+    section("2. Grid Search: Sequential vs Parallel")
 
     cpu_count = os.cpu_count() or 1
 
     # Windows process spawn costs ~500ms per worker (module re-import).
-    # Each combo on 5yr data takes ~11ms — you need 500/11 ≈ 46 combos per
+    # Each combo on 5yr data takes ~11ms; you need 500/11 ≈ 46 combos per
     # worker just to break even. With 16 workers that's 736 combos minimum,
     # which is impractical for a benchmark.
     #
     # The fix: make each combo more expensive by using longer data.
     # At 20yr/combo (~43ms each), the crossover point with 4 workers is
-    # 500/43 × 4 ≈ 47 combos — achievable.
+    # 500/43 × 4 ≈ 47 combos.
     # At 100yr/combo (~110ms each), even 2 workers break even at 9 combos.
     #
     # We run two sub-benchmarks so the output shows both sides of the curve.
@@ -203,9 +203,9 @@ def bench_parallel():
     print(f"                 combo_time × (combos / workers) >> 500ms.")
     print()
 
-    for years, label in [(5,   "5yr/combo   (~11ms each)  — too cheap for Windows"),
-                         (20,  "20yr/combo  (~42ms each)  — marginal"),
-                         (100, "100yr/combo (~240ms each) — clear speedup")]:
+    for years, label in [(5,   "5yr/combo   (~11ms each) too cheap for Windows"),
+                         (20,  "20yr/combo  (~42ms each) marginal"),
+                         (100, "100yr/combo (~240ms each) clear speedup")]:
         bars = make_bars("ASSET", years * 252)
         data = {"ASSET": bars}
 
@@ -281,7 +281,7 @@ def bench_loading():
 # ============================================================================
 
 def bench_numpy_add_data():
-    section("4. add_data — numpy array vs List[BarData]")
+    section("4. add_data; numpy array vs List[BarData]")
 
     print("  Measures the cost of loading data into the engine before run().")
     print("  List[BarData] path: N individual pybind11 object crossings.")
@@ -306,7 +306,7 @@ def bench_numpy_add_data():
     for n_bars, label_suffix in [(252, "1 yr"), (1_260, "5 yr"),
                                  (2_520, "10 yr"), (12_600, "10 sym×5yr")]:
 
-        # List[BarData] path — one add_data call per symbol
+        # List[BarData] path, one add_data call per symbol
         bars_list = make_bars("SYM", n_bars)
 
         def add_list(bl=bars_list):
@@ -333,9 +333,9 @@ def bench_numpy_add_data():
 
         speedup = p50_list / p50_numpy
 
-        print(fmt.format(f"List[BarData] — {label_suffix}", n_bars,
+        print(fmt.format(f"List[BarData]; {label_suffix}", n_bars,
                          f"{bps_list:>14,.0f}", f"{p50_list*1000:>10.2f}", f"{p99_list*1000:>10.2f}"))
-        print(fmt.format(f"numpy (N,6)  — {label_suffix}", n_bars,
+        print(fmt.format(f"numpy (N,6); {label_suffix}", n_bars,
                          f"{bps_numpy:>14,.0f}", f"{p50_numpy*1000:>10.2f}", f"{p99_numpy*1000:>10.2f}"))
         print(f"  {'speedup':>30}  {speedup:>8.2f}x")
         print()
@@ -352,7 +352,7 @@ def bench_numpy_add_data():
 if __name__ == "__main__":
     print()
     sep("=")
-    print("  QuantCore — Python Layer Benchmarks")
+    print("  QuantCore; Python Layer Benchmarks")
     sep("=")
     print()
 

@@ -272,7 +272,7 @@ private:
     };
 
     // A stop or stop-limit order waiting for its trigger price to be touched.
-    // quantity == 0.0 means "close full position" — resolved at trigger time.
+    // quantity == 0.0 means "close full position", resolved at trigger time.
     struct PendingStop {
         uint64_t    id;           // assigned when registered, used for dedup
         Side        side;
@@ -851,7 +851,7 @@ private:
 
         // Stop and StopLimit orders are handled entirely by handle_md and
         // never reach handle_ord. If one arrives here, it means something
-        // constructed an OrderEvent with those types directly — reject it.
+        // constructed an OrderEvent with those types directly, reject it.
         if (ord->get_order_type() == OrderType::Stop ||
             ord->get_order_type() == OrderType::StopLimit) {
             throw std::runtime_error(

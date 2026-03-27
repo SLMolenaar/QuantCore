@@ -737,7 +737,7 @@ qc.OrderType.GOOD_FOR_DAY        # Canceled at end of session if unfilled
 ```
 
 `STOP` and `STOP_LIMIT` also appear in the `OrderType` enum but cannot be used by
-constructing an `OrderEvent` directly — doing so raises a `RuntimeError`. Use the
+constructing an `OrderEvent` directly; doing so raises a `RuntimeError`. Use the
 strategy methods instead:
 ```python
 # Sell stop: triggers a market fill when price falls to or below stop_price.
@@ -1143,7 +1143,7 @@ calendar-day span from the equity peak to recovery (or end of data). When
 
 `calculate_benchmark_metrics` computes benchmark-relative performance metrics from
 two period-return arrays. Pass `timestamps` to let it infer the correct annualisation
-factor automatically — this is especially important for intraday and tick data where
+factor automatically; this is especially important for intraday and tick data where
 the default of 252 would produce wildly wrong annualised figures.
 
 ```python
@@ -1152,7 +1152,7 @@ from quantcore.analytics import calculate_benchmark_metrics
 bm_metrics = calculate_benchmark_metrics(
   strategy_returns,   # np.ndarray, output of calculate_returns on strategy equity
   benchmark_returns,  # np.ndarray, output of calculate_returns on benchmark equity
-  timestamps=timestamps,  # recommended — auto-infers periods_per_year
+  timestamps=timestamps,  # recommended; auto-infers periods_per_year
 )
 print(bm_metrics)
 # ============================================================
@@ -1186,7 +1186,7 @@ calculate_benchmark_metrics(
 )
 ```
 
-Both return arrays must be the same type as `calculate_returns` output — period
+Both return arrays must be the same type as `calculate_returns` output, period
 returns, not equity curves. If the two backtests produced different-length equity
 curves, align them on a common timestamp index before calling this function; the
 function clips to the shorter of the two arrays as a fallback but alignment is
@@ -1222,7 +1222,7 @@ them in `results.benchmark_metrics`. The timestamps from the strategy run are us
 `periods_per_year` inference, so no manual override is needed:
 
 ```python
-# Via run_backtest — benchmark runs automatically
+# Via run_backtest; benchmark runs automatically
 results = qc.run_backtest(
   strategy=MyStrategy(),
   data={'AAPL': bars},
@@ -1280,7 +1280,7 @@ ppy = infer_periods_per_year(timestamps)
 
 roll_sharpe = rolling_sharpe(returns, window=60, periods_per_year=ppy)
 # np.ndarray of length len(returns) - window + 1
-# NaN where the rolling window is entirely flat (std == 0) — renders as a
+# NaN where the rolling window is entirely flat (std == 0); renders as a
 # gap in charts rather than a misleading spike.
 
 roll_vol = rolling_volatility(returns, window=60, periods_per_year=ppy)
@@ -1379,7 +1379,7 @@ fig = plot_underwater(equity, timestamps=timestamps)
 ### plot_returns_distribution
 
 Histogram of returns with Q-Q plot. Zero-return periods (flat equity between
-trades) are automatically excluded — common with tick/minute data where most
+trades) are automatically excluded, common with tick/minute data where most
 snapshots show no change because there is no open position. The excluded
 fraction is noted in an annotation when it exceeds 5%:
 
@@ -1980,7 +1980,7 @@ See [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md) for the full tick data b
 
 ## 16. Trading Calendar
 
-Without a trading calendar, the engine processes every bar in the series regardless of date. If your data contains bars dated on weekends, exchange holidays, or other non-trading days — common with synthetic data, research databases, or anything you have assembled manually — those bars generate signals and simulate fills against a market maker that will always fill. For daily strategies this inflates performance by roughly 10–14 extra trading days per year.
+Without a trading calendar, the engine processes every bar in the series regardless of date. If your data contains bars dated on weekends, exchange holidays, or other non-trading days, common with synthetic data, research databases, or anything you have assembled manually, those bars generate signals and simulate fills against a market maker that will always fill. For daily strategies this inflates performance by roughly 10–14 extra trading days per year.
 
 The `TradingCalendar` class filters a bar series to remove non-trading days before the data reaches the engine. It is backed by `pandas_market_calendars`, which covers 50+ exchanges including NYSE, NASDAQ, LSE, TSX, EUREX, and ASX, and handles the edge cases you would otherwise have to hardcode: Good Friday (calculated from Easter), Juneteenth (added to NYSE in 2022), observed holidays (e.g. when Christmas falls on a Sunday), and ad hoc closures.
 
@@ -1988,14 +1988,14 @@ Requires: `pip install pandas_market_calendars`
 
 ### Usage
 
-**At load time** — the simplest option:
+**At load time**; the simplest option:
 
 ```python
 bars = qc.load_csv_data('data/aapl.csv', 'AAPL', calendar='NYSE')
 bars = qc.load_parquet_data('data/aapl.parquet', 'AAPL', calendar='NYSE')
 ```
 
-**At run time** — applies the same calendar to every symbol in the backtest:
+**At run time**; applies the same calendar to every symbol in the backtest:
 
 ```python
 results = qc.run_backtest(
@@ -2006,14 +2006,14 @@ results = qc.run_backtest(
 )
 ```
 
-**Explicitly** — when you need more control:
+**Explicitly**; when you need more control:
 
 ```python
 cal  = qc.TradingCalendar('NYSE')
 bars = cal.filter_bars(qc.load_csv_data('data/aapl.csv', 'AAPL'))
 ```
 
-The `calendar` parameter is not available on `run_tick_backtest`. Tick data loaded from an exchange feed already contains only actual trades — filtering by calendar would be wrong for crypto and other markets that trade on holidays.
+The `calendar` parameter is not available on `run_tick_backtest`. Tick data loaded from an exchange feed already contains only actual trades, filtering by calendar would be wrong for crypto and other markets that trade on holidays.
 
 ### filter_bars parameters
 
@@ -2025,7 +2025,7 @@ cal.filter_bars(
 )
 ```
 
-In the default mode (`strict=False`), removed bars emit a `UserWarning` showing how many were dropped and why. In strict mode, a `RuntimeError` is raised if the removed fraction exceeds `max_skip_pct`. Either way, if every bar in the series falls on a non-trading day, `filter_bars` raises `RuntimeError` — an empty series would crash the engine silently.
+In the default mode (`strict=False`), removed bars emit a `UserWarning` showing how many were dropped and why. In strict mode, a `RuntimeError` is raised if the removed fraction exceeds `max_skip_pct`. Either way, if every bar in the series falls on a non-trading day, `filter_bars` raises `RuntimeError`, an empty series would crash the engine silently.
 
 ### is_trading_day
 
@@ -2045,4 +2045,4 @@ qc.TradingCalendar.available_calendars()
 
 Use the calendar whenever your data comes from a source that does not already guarantee trading-day-only bars. Yahoo Finance daily data, CRSP, and most vendor feeds are clean. Synthetic data, hand-assembled CSVs, and data resampled from intraday sources without a session filter often are not.
 
-Tick data does not need calendar filtering. A tick is a real trade — if there is a tick, the market was open.
+Tick data does not need calendar filtering. A tick is a real trade; if there is a tick, the market was open.

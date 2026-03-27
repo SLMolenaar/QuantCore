@@ -249,7 +249,6 @@ private:
             }
 
             // Erase the consumed prefix from each vector in one shot.
-            // Remaining orders' indices in orders_ are now stale — fix them up.
             if (bidIdx > 0) {
                 bids.erase(bids.begin(), bids.begin() + bidIdx);
                 for (std::size_t i = 0; i < bids.size(); ++i) {
@@ -267,7 +266,6 @@ private:
             if (asks.empty()) asks_.erase(askPrice);
         }
 
-        // Cancel any unfilled IOC remainder directly by ID — no book scan needed.
         if (iocOrderId.has_value()) {
             CancelOrder(iocOrderId.value());
         }

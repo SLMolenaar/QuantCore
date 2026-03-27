@@ -9,12 +9,12 @@ array path (fastest) or the BarData list path, matching the same
 column conventions as CSVDataLoader.
 
 Expected schema (column names are case-insensitive):
-    timestamp   — UNIX timestamp (int64 ns, us, ms, or s) or datetime64
-    open        — open price
-    high        — high price
-    low         — low price
-    close       — close price
-    volume      — traded volume
+    timestamp: UNIX timestamp (int64 ns, us, ms, or s) or datetime64
+    open: open price
+    high: high price
+    low: low price
+    close: close price
+    volume: traded volume
 
 Optionally a 'symbol' column may be present; if so, it takes priority
 over the symbol argument passed to load().
@@ -204,7 +204,7 @@ class ParquetDataLoader:
 
         Args:
             filepath: Path to the .parquet file.
-            symbol:   Unused — present for API symmetry with load(). Symbol is
+            symbol:   Unused; present for API symmetry with load(). Symbol is
                       supplied separately to add_data().
 
         Returns:
