@@ -161,6 +161,8 @@ public:
         halted_                  = false;
         pending_buys_.clear();
         gfd_orders_.clear();
+        pending_strategy_orders_.clear();
+        strategy_order_remaining_.clear();
         last_event_day_          = -1;
         last_equity_snapshot_ns_ = -1;
         mm_last_refresh_.clear();
@@ -318,6 +320,15 @@ private:
     std::unordered_map<uint64_t, PendingBuy>                          pending_buys_;
     std::unordered_map<std::string, std::unordered_set<uint64_t>>     gfd_orders_;
 
+    // Wash trade prevention
+    // Tracks all live unfilled strategy order IDs per symbol so they can be
+    // cancelled before a new signal in the opposite direction is placed.
+    // Without this a stale resting buy could self-match against a new sell
+    // if price reverses before the original order fills, triggering the wash
+    // trade guard in ExecutionEngine::update_position().
+    std::unordered_map<std::string, std::unordered_set<uint64_t>> pending_strategy_orders_;
+    std::unordered_map<uint64_t, double> strategy_order_remaining_;
+
     int64_t last_event_day_; // UTC day of last market-data event; -1 before first event
 
     static constexpr size_t  PRICE_HISTORY_BUFFER = 10;
@@ -345,6 +356,21 @@ private:
 
     void cancel_pending_buy(uint64_t order_id) {
         pending_buys_.erase(order_id);
+    }
+
+    // Cancel all live strategy orders for a symbol and clear tracking state.
+    void cancel_stale_strategy_orders(const std::string& symbol,
+                                      ExecutionEngine& engine) {
+        auto it = pending_strategy_orders_.find(symbol);
+        if (it == pending_strategy_orders_.end() || it->second.empty())
+            return;
+
+        for (uint64_t stale_id : it->second) {
+            engine.cancel_order(stale_id);
+            cancel_pending_buy(stale_id);
+            strategy_order_remaining_.erase(stale_id);
+        }
+        it->second.clear();
     }
 
     template<typename T, typename... Args>
@@ -461,6 +487,20 @@ private:
 
     void flatten_all_positions(int64_t timestamp) {
         halted_ = true;
+
+        // Cancel all pending strategy orders before placing close orders.
+        for (auto& [sym, ids] : pending_strategy_orders_) {
+            auto ee_it = engines_.find(sym);
+            if (ee_it != engines_.end()) {
+                for (uint64_t id : ids) {
+                    ee_it->second->cancel_order(id);
+                    cancel_pending_buy(id);
+                    strategy_order_remaining_.erase(id);
+                }
+            }
+        }
+        pending_strategy_orders_.clear();
+
         for (const auto& [symbol, ee] : engines_) {
             double pos = ee->get_position();
             if (std::abs(pos) < MIN_ORDER_QTY) continue;
@@ -510,6 +550,9 @@ private:
                     for (uint64_t id : ids) {
                         ee_it->second->cancel_order(id);
                         cancel_pending_buy(id);
+                        // Also remove from strategy order tracking.
+                        strategy_order_remaining_.erase(id);
+                        pending_strategy_orders_[sym].erase(id);
                     }
                 }
             }
@@ -563,6 +606,9 @@ private:
 
         auto ee_it = engines_.find(sig->get_symbol());
         if (ee_it == engines_.end()) return;
+
+        // Cancel any stale unfilled strategy orders for this symbol before placing a new one.
+        cancel_stale_strategy_orders(sig->get_symbol(), *ee_it->second);
 
         double curr_pos      = ee_it->second->get_position();
         double portfolio_vol = calculate_volatility(sig->get_symbol());
@@ -622,6 +668,11 @@ private:
         if (ord_side == Side::Buy)
             pending_buys_[ord->get_order_id()] = {curr_px, ord_qty};
 
+        // Track this order so it can be cancelled if a new signal arrives
+        // before it fills.
+        pending_strategy_orders_[sig->get_symbol()].insert(ord->get_order_id());
+        strategy_order_remaining_[ord->get_order_id()] = ord_qty;
+
         eq_.push(ord);
     }
 
@@ -680,6 +731,15 @@ private:
         if (fill->get_side() == Side::Buy)
             release_pending_buy(fill->get_order_id(), fill->get_quantity());
 
+        auto rem_it = strategy_order_remaining_.find(fill->get_order_id());
+        if (rem_it != strategy_order_remaining_.end()) {
+            rem_it->second -= fill->get_quantity();
+            if (rem_it->second <= MIN_ORDER_QTY) {
+                strategy_order_remaining_.erase(rem_it);
+                pending_strategy_orders_[fill->get_symbol()].erase(fill->get_order_id());
+            }
+        }
+
         auto ee_it = engines_.find(fill->get_symbol());
         if (ee_it != engines_.end()) {
             double new_pos = ee_it->second->get_position();
@@ -691,4 +751,4 @@ private:
     }
 };
 
-}
+} // namespace quantcore
