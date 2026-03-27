@@ -2,7 +2,6 @@
 
 ![PyPI](https://img.shields.io/pypi/v/quantcore)
 ![Build](https://github.com/SLMolenaar/quantcore/actions/workflows/coverage.yml/badge.svg)
-![Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)
 ![C++](https://img.shields.io/badge/C%2B%2B-20-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -77,7 +76,7 @@ from quantcore.analytics import calculate_all_metrics, calculate_returns
 from quantcore.plotting import plot_full_tearsheet
 import numpy as np
 
-equity = np.array(results['equity_curve'])
+equity  = np.array(results.equity_curve)
 returns = calculate_returns(equity)
 print(calculate_all_metrics(equity))
 plot_full_tearsheet(equity, returns)
@@ -88,6 +87,7 @@ For the full API reference and usage guide, see [docs/usage.md](docs/usage.md).
 ---
 
 ## Architecture
+
 Every action goes through the event queue. When a strategy calls `generate_signal`, that signal becomes an `OrderEvent`, which goes through the order book, produces a `FillEvent`, which updates the portfolio. All in timestamp order. This is what prevents look-ahead bias: the strategy never sees data from the future.
 
 ![img.png](flowchart.png)
@@ -156,6 +156,27 @@ engine.set_position_sizer(qc.FixedPercentage(0.10))  # 10% of capital per trade
 
 Built-in sizers: `FixedPercentage`, `RiskBased`, `KellyCriterion`, `EqualWeight`, `VolatilityTargeting`, `FixedShares`.
 
+Pass a `BacktestConfig` to `run_backtest` or `run_tick_backtest` to control sizing, fees,
+slippage, and risk limits in one place:
+
+```python
+from quantcore import BacktestConfig
+
+config = BacktestConfig(
+    sizer_type='VolatilityTargeting',
+    sizer_args=(0.15,),
+    taker_fee=0.001,
+    max_position_pct=0.25,
+)
+
+results = qc.run_backtest(
+    strategy=MyStrategy(),
+    data={'AAPL': bars},
+    initial_capital=100_000.0,
+    backtest_config=config,
+)
+```
+
 ---
 
 ## Tick Data
@@ -188,6 +209,7 @@ Most data vendors offer adjusted data:
 - Quandl/NASDAQ Data Link: `WIKI/PRICES` table uses adjusted prices
 
 If you have raw unadjusted data, use `CorporateActionsAdjuster`:
+
 ```python
 from quantcore import CorporateActionsAdjuster
 
@@ -195,9 +217,9 @@ adjuster = CorporateActionsAdjuster.from_csv(
     splits_csv='data/aapl_splits.csv',
     dividends_csv='data/aapl_dividends.csv',
 )
-raw_bars    = qc.load_csv_data('data/aapl_raw.csv', 'AAPL')
-adj_bars    = adjuster.adjust(raw_bars)
-results     = qc.run_backtest(strategy=MyStrategy(), data={'AAPL': adj_bars}, ...)
+raw_bars = qc.load_csv_data('data/aapl_raw.csv', 'AAPL')
+adj_bars = adjuster.adjust(raw_bars)
+results  = qc.run_backtest(strategy=MyStrategy(), data={'AAPL': adj_bars}, ...)
 ```
 
 ### Aggregation
@@ -258,10 +280,10 @@ Timestamps in seconds, milliseconds, microseconds, or nanoseconds - detected aut
 from quantcore import ExecutionConfig
 
 config = ExecutionConfig()
-config.maker_fee     = 0.001   # 0.1% maker
-config.taker_fee     = 0.002   # 0.2% taker
-config.slippage_pct  = 0.0005  # 0.05% slippage
-config.latency_ns    = 1_000_000  # 1ms order latency
+config.maker_fee    = 0.001      # 0.1% maker
+config.taker_fee    = 0.002      # 0.2% taker
+config.slippage_pct = 0.0005     # 0.05% slippage
+config.latency_ns   = 1_000_000  # 1ms order latency
 
 engine = qc.BacktestEngine(100_000.0, config)
 ```
@@ -328,12 +350,12 @@ python benchmarks/bench_tick_python.py
 
 ## Analytics
 
-After running a backtest, the results dict contains an equity curve and trade log you can feed straight into the analytics module.
+After running a backtest, pass the equity curve and trade log straight into the analytics module.
 
 ```python
 from quantcore.analytics import calculate_all_metrics, calculate_returns
 
-equity  = np.array(results['equity_curve'])
+equity  = np.array(results.equity_curve)
 returns = calculate_returns(equity)
 metrics = calculate_all_metrics(equity)
 
@@ -429,6 +451,7 @@ quantcore/
 ├── python/
 │   ├── quantcore/            # Python package
 │   │   ├── __init__.py       # Public API
+│   │   ├── _engine_builder.py# Shared engine construction from BacktestConfig
 │   │   ├── analytics.py      # Performance metrics
 │   │   ├── plotting.py       # Visualizations
 │   │   └── tick_parquet_loader.py  # Parquet loader for tick data
@@ -473,9 +496,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Open areas if you want to dig in:
 
 - **VWAP / TWAP algos**: `ExecutionEngine`, child order slicing
 - **Multi-strategy portfolio**: shared capital across strategies with a meta-allocator
-- **Parallel sweeps on Linux**: `n_jobs` exists but Windows spawn overhead kills it; a Linux worker pool would make it actually useful
+- **Parallel sweeps on Linux**: `n_jobs` exists but Windows process spawn overhead (~500ms per worker) means `n_jobs > 1` is slower than sequential for backtests under ~100 years. On Linux (fork-based), the break-even point is much lower and parallelism works as expected. Use Linux or WSL for parallel parameter sweeps.
 
-The engine doesn't handle corporate actions, survivorship bias, or timezone normalization. Feed it clean adjusted data and none of those are problems.
+The engine doesn't handle survivorship bias or timezone normalization. Feed it clean adjusted data and none of those are problems.
 
 ---
 
