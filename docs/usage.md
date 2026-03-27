@@ -42,10 +42,10 @@ You can also call `CSVDataLoader` directly for lower-level access, including con
 
 ```python
 bars = qc.CSVDataLoader.load(
-    'data/aapl.csv',
-    symbol='AAPL',
-    has_header=True,
-    max_skip_pct=0.20   # raise an error if more than 20% of rows fail to parse
+  'data/aapl.csv',
+  symbol='AAPL',
+  has_header=True,
+  max_skip_pct=0.20   # raise an error if more than 20% of rows fail to parse
 )
 ```
 
@@ -193,8 +193,8 @@ If you have raw unadjusted data, use `CorporateActionsAdjuster`:
 from quantcore import CorporateActionsAdjuster
 
 adjuster = CorporateActionsAdjuster.from_csv(
-    splits_csv='data/aapl_splits.csv',
-    dividends_csv='data/aapl_dividends.csv',
+  splits_csv='data/aapl_splits.csv',
+  dividends_csv='data/aapl_dividends.csv',
 )
 raw_bars    = qc.load_csv_data('data/aapl_raw.csv', 'AAPL')
 adj_bars    = adjuster.adjust(raw_bars)
@@ -211,17 +211,17 @@ Subclass `qc.Strategy` and implement `on_data`. Implementing `on_fill` and `on_r
 import quantcore as qc
 
 class MyStrategy(qc.Strategy):
-    def on_data(self, event: qc.MarketDataEvent):
-        # Called once per bar or tick, per symbol
-        pass
+  def on_data(self, event: qc.MarketDataEvent):
+    # Called once per bar or tick, per symbol
+    pass
 
-    def on_fill(self, fill: qc.FillEvent):
-        # Called after each execution confirmation
-        pass
+  def on_fill(self, fill: qc.FillEvent):
+    # Called after each execution confirmation
+    pass
 
-    def on_rejected(self, symbol: str, reason: str):
-        # Called when a signal is rejected by risk limits
-        pass
+  def on_rejected(self, symbol: str, reason: str):
+    # Called when a signal is rejected by risk limits
+    pass
 ```
 
 ### MarketDataEvent fields
@@ -279,9 +279,9 @@ fill.commission
 
 ```python
 def on_rejected(self, symbol: str, reason: str):
-    # symbol: the asset whose signal was rejected
-    # reason: human-readable explanation from the risk manager
-    print(f"Order rejected for {symbol}: {reason}")
+  # symbol: the asset whose signal was rejected
+  # reason: human-readable explanation from the risk manager
+  print(f"Order rejected for {symbol}: {reason}")
 ```
 
 Possible rejection reasons correspond to `RiskCheckResult` values: position limit breached, leverage limit breached, no capital available, max loss limit exceeded, or single-order notional limit breached.
@@ -292,10 +292,10 @@ You do not place orders directly. You generate a signal and the engine converts 
 
 ```python
 self.generate_signal(
-    symbol,            # str
-    qc.SignalType.BUY, # or SELL, HOLD
-    1.0,               # signal strength, 0.0–1.0, scales position size
-    event.get_timestamp()
+  symbol,            # str
+  qc.SignalType.BUY, # or SELL, HOLD
+  1.0,               # signal strength, 0.0–1.0, scales position size
+  event.get_timestamp()
 )
 ```
 
@@ -316,10 +316,10 @@ has_pos  = self.has_position(symbol)  # bool, True if abs(position) > 0
 # Inside on_data or on_fill:
 portfolio = self.get_portfolio()   # PortfolioContext, or None if called before run()
 if portfolio:
-    cash    = portfolio.get_cash()
-    value   = portfolio.get_portfolio_value()
-    pos     = portfolio.get_position('AAPL')
-    weight  = portfolio.get_position_weight('AAPL')
+  cash    = portfolio.get_cash()
+  value   = portfolio.get_portfolio_value()
+  pos     = portfolio.get_position('AAPL')
+  weight  = portfolio.get_position_weight('AAPL')
 ```
 
 See [PortfolioContext](#portfoliocontext) for the full API.
@@ -328,49 +328,49 @@ See [PortfolioContext](#portfoliocontext) for the full API.
 
 ```python
 class ZScoreMeanReversion(qc.Strategy):
-    def __init__(self, lookback: int = 20, entry_z: float = 1.5, exit_z: float = 0.5):
-        super().__init__("ZScoreMeanReversion")
-        self.lookback = lookback
-        self.entry_z  = entry_z
-        self.exit_z   = exit_z
-        self._prices  = {}
+  def __init__(self, lookback: int = 20, entry_z: float = 1.5, exit_z: float = 0.5):
+    super().__init__("ZScoreMeanReversion")
+    self.lookback = lookback
+    self.entry_z  = entry_z
+    self.exit_z   = exit_z
+    self._prices  = {}
 
-    def on_data(self, event):
-        sym = event.get_symbol()
-        if sym not in self._prices:
-            self._prices[sym] = []
+  def on_data(self, event):
+    sym = event.get_symbol()
+    if sym not in self._prices:
+      self._prices[sym] = []
 
-        self._prices[sym].append(event.get_close())
-        if len(self._prices[sym]) > self.lookback:
-            self._prices[sym].pop(0)
+    self._prices[sym].append(event.get_close())
+    if len(self._prices[sym]) > self.lookback:
+      self._prices[sym].pop(0)
 
-        if len(self._prices[sym]) < self.lookback:
-            return
+    if len(self._prices[sym]) < self.lookback:
+      return
 
-        prices = self._prices[sym]
-        mean   = sum(prices) / len(prices)
-        std    = (sum((p - mean) ** 2 for p in prices) / len(prices)) ** 0.5
+    prices = self._prices[sym]
+    mean   = sum(prices) / len(prices)
+    std    = (sum((p - mean) ** 2 for p in prices) / len(prices)) ** 0.5
 
-        if std == 0:
-            return
+    if std == 0:
+      return
 
-        z_score  = (event.get_close() - mean) / std
-        position = self.get_position(sym)
+    z_score  = (event.get_close() - mean) / std
+    position = self.get_position(sym)
 
-        if z_score < -self.entry_z and position == 0:
-            self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.get_timestamp())
-        elif z_score > self.entry_z and position == 0:
-            self.generate_signal(sym, qc.SignalType.SELL, 1.0, event.get_timestamp())
-        elif position > 0 and z_score > -self.exit_z:
-            self.generate_signal(sym, qc.SignalType.SELL, 1.0, event.get_timestamp())
-        elif position < 0 and z_score < self.exit_z:
-            self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.get_timestamp())
+    if z_score < -self.entry_z and position == 0:
+      self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.get_timestamp())
+    elif z_score > self.entry_z and position == 0:
+      self.generate_signal(sym, qc.SignalType.SELL, 1.0, event.get_timestamp())
+    elif position > 0 and z_score > -self.exit_z:
+      self.generate_signal(sym, qc.SignalType.SELL, 1.0, event.get_timestamp())
+    elif position < 0 and z_score < self.exit_z:
+      self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.get_timestamp())
 
-    def on_fill(self, fill):
-        print(f"Filled: {fill.get_side()} {fill.get_quantity()} @ {fill.get_price():.2f}")
+  def on_fill(self, fill):
+    print(f"Filled: {fill.get_side()} {fill.get_quantity()} @ {fill.get_price():.2f}")
 
-    def on_rejected(self, symbol, reason):
-        print(f"Rejected: {symbol} - {reason}")
+  def on_rejected(self, symbol, reason):
+    print(f"Rejected: {symbol} - {reason}")
 ```
 
 ### Using signal strength
@@ -393,9 +393,9 @@ self.generate_signal(sym, qc.SignalType.BUY, 0.5, event.get_timestamp())
 
 ```python
 results = qc.run_backtest(
-    strategy=MyStrategy(),
-    data={'AAPL': qc.load_csv_data('data/aapl.csv', 'AAPL')},
-    initial_capital=100_000.0,
+  strategy=MyStrategy(),
+  data={'AAPL': qc.load_csv_data('data/aapl.csv', 'AAPL')},
+  initial_capital=100_000.0,
 )
 ```
 
@@ -403,9 +403,9 @@ results = qc.run_backtest(
 
 ```python
 results = qc.run_backtest(
-    strategy=MyStrategy(),
-    data={'AAPL': bars},
-    initial_capital=100_000.0,
+  strategy=MyStrategy(),
+  data={'AAPL': bars},
+  initial_capital=100_000.0,
 ).compute()
 
 print(results)
@@ -416,12 +416,32 @@ To filter weekends and exchange holidays before running, pass a `calendar` argum
 
 ```python
 results = qc.run_backtest(
-    strategy=MyStrategy(),
-    data={'AAPL': bars_aapl, 'MSFT': bars_msft},
-    initial_capital=100_000.0,
-    calendar='NYSE',
+  strategy=MyStrategy(),
+  data={'AAPL': bars_aapl, 'MSFT': bars_msft},
+  initial_capital=100_000.0,
+  calendar='NYSE',
 )
 ```
+
+To control position sizing, fees, slippage, and risk limits, pass a `BacktestConfig`:
+
+```python
+config = qc.BacktestConfig(
+    sizer_type='VolatilityTargeting',
+    sizer_args=(0.15,),
+    taker_fee=0.001,
+    max_position_pct=0.25,
+)
+
+results = qc.run_backtest(
+    strategy=MyStrategy(),
+    data={'AAPL': bars},
+    initial_capital=100_000.0,
+    backtest_config=config,
+)
+```
+
+When `backtest_config` is `None` (the default), the engine uses `FixedPercentage(0.10)` and standard fee defaults. See `BacktestConfig` in [Section 12](#12-parameter-sweeps-and-optimization) for all available fields.
 
 See [Trading Calendar](#16-trading-calendar) for supported exchanges and behaviour.
 
@@ -438,6 +458,19 @@ results = qc.run_tick_backtest(
 ```
 
 The same strategy class works for bar and tick data. `event.close` is the tick price. Both `mm_refresh_interval_ns` and `equity_snapshot_interval_ns` have sensible defaults - see below for what they control.
+
+A `BacktestConfig` can be passed here too:
+
+```python
+results = qc.run_tick_backtest(
+    strategy=MyStrategy(),
+    tick_data={'AAPL': ticks},
+    initial_capital=100_000.0,
+    backtest_config=config,
+)
+```
+
+When `backtest_config` is provided the sizer, fees, slippage, `bars_per_year`, and risk limits are all applied. The `mm_refresh_interval_ns` and `equity_snapshot_interval_ns` parameters are independent and still control MM throttling and snapshot frequency regardless of the config.
 
 ### BacktestEngine (direct)
 
@@ -601,9 +634,9 @@ The engine raises an exception if:
 
 ```python
 results = qc.run_backtest(
-    strategy=MyStrategy(),
-    data={'AAPL': bars},
-    initial_capital=100_000.0,
+  strategy=MyStrategy(),
+  data={'AAPL': bars},
+  initial_capital=100_000.0,
 )
 
 print(results)
@@ -753,9 +786,9 @@ Sizes based on a fixed risk amount (fraction of capital) divided by stop-loss di
 sizer = qc.RiskBased(0.01)  # Risk 1% of capital per trade
 engine.set_position_sizer(sizer)
 engine.set_volatility_params(
-    default_vol=0.02,   # fallback volatility estimate
-    stop_distance=0.05, # stop-loss distance as fraction of price (e.g. 5%)
-    lookback=20         # bars used for rolling volatility
+  default_vol=0.02,   # fallback volatility estimate
+  stop_distance=0.05, # stop-loss distance as fraction of price (e.g. 5%)
+  lookback=20         # bars used for rolling volatility
 )
 ```
 
@@ -830,12 +863,12 @@ sizer = engine.get_position_sizer()
 
 ```python
 ctx = qc.PositionSizingContext(
-    signal_strength=1.0,
-    current_capital=100_000.0,
-    current_price=150.0,
-    current_position=0.0,
-    portfolio_volatility=0.02,
-    stop_loss_distance=0.05
+  signal_strength=1.0,
+  current_capital=100_000.0,
+  current_price=150.0,
+  current_position=0.0,
+  portfolio_volatility=0.02,
+  stop_loss_distance=0.05
 )
 shares = sizer.calculate_size(ctx)
 ```
@@ -872,9 +905,9 @@ print(result.reasoning)           # human-readable explanation
 from quantcore import PortfolioPositionSizer
 
 sizer = PortfolioPositionSizer(
-    capital=100_000.0,
-    max_total_exposure=1.0,    # max gross notional / capital
-    max_single_position=0.20,  # max single-asset notional / capital
+  capital=100_000.0,
+  max_total_exposure=1.0,    # max gross notional / capital
+  max_single_position=0.20,  # max single-asset notional / capital
 )
 
 # Update tracked notional after a fill
@@ -891,7 +924,7 @@ allowed, reason = sizer.can_add_position('GOOGL', notional_value=20_000.0)
 # Size a new position respecting all constraints; returns None if no room
 result = sizer.size_new_position('GOOGL', price=140.0, desired_percentage=0.10)
 if result:
-    print(result.quantity)
+  print(result.quantity)
 ```
 
 ---
@@ -905,8 +938,8 @@ limits = qc.RiskLimits()
 
 limits.enabled            = True   # Set False to disable all checks
 limits.max_position_pct   = 0.20   # Max position notional / capital (per symbol).
-                                   # Values above 1.0 allow leverage on a single asset,
-                                   # e.g. 2.0 means one asset can be sized up to 2x capital.
+# Values above 1.0 allow leverage on a single asset,
+# e.g. 2.0 means one asset can be sized up to 2x capital.
 limits.max_leverage       = 2.0    # Max total notional / capital across all positions
 limits.max_loss_pct       = 0.50   # Halt if drawdown from initial capital exceeds this
 limits.max_order_value    = 50_000 # Max notional per single order (0 = no limit)
@@ -934,9 +967,9 @@ risk_mgr = engine.get_risk_manager()
 response = risk_mgr.check_order('AAPL', qc.Side.BUY, quantity=100, price=175.0)
 
 if response.is_approved():
-    print("Order approved")
+  print("Order approved")
 else:
-    print(f"Rejected: {response.result}, {response.reason}")
+  print(f"Rejected: {response.result}, {response.reason}")
 ```
 
 `RiskCheckResult` enum values:
@@ -979,14 +1012,14 @@ All analytics functions live in `quantcore.analytics` and operate on NumPy array
 ```python
 import numpy as np
 from quantcore.analytics import (
-    calculate_returns,
-    calculate_all_metrics,
-    calculate_benchmark_metrics,
-    infer_periods_per_year,
-    rolling_sharpe,
-    rolling_volatility,
-    monthly_returns,
-    underwater_plot_data,
+  calculate_returns,
+  calculate_all_metrics,
+  calculate_benchmark_metrics,
+  infer_periods_per_year,
+  rolling_sharpe,
+  rolling_volatility,
+  monthly_returns,
+  underwater_plot_data,
 )
 
 equity     = np.array(engine.get_equity_curve())
@@ -1040,11 +1073,11 @@ print(metrics)
 
 ```python
 calculate_all_metrics(
-    equity_curve,
-    trade_pnls=None,       # List[float], per-trade PnL for trade-level metrics
-    timestamps=None,       # np.ndarray of int64 nanosecond timestamps
-    risk_free_rate=0.0,    # annual rate, e.g. 0.02 = 2%
-    periods_per_year=None, # int or None; when None, auto-inferred from timestamps
+  equity_curve,
+  trade_pnls=None,       # List[float], per-trade PnL for trade-level metrics
+  timestamps=None,       # np.ndarray of int64 nanosecond timestamps
+  risk_free_rate=0.0,    # annual rate, e.g. 0.02 = 2%
+  periods_per_year=None, # int or None; when None, auto-inferred from timestamps
 )                          # falls back to 252 when no timestamps provided
 ```
 
@@ -1071,9 +1104,9 @@ the default of 252 would produce wildly wrong annualised figures.
 from quantcore.analytics import calculate_benchmark_metrics
 
 bm_metrics = calculate_benchmark_metrics(
-    strategy_returns,   # np.ndarray, output of calculate_returns on strategy equity
-    benchmark_returns,  # np.ndarray, output of calculate_returns on benchmark equity
-    timestamps=timestamps,  # recommended — auto-infers periods_per_year
+  strategy_returns,   # np.ndarray, output of calculate_returns on strategy equity
+  benchmark_returns,  # np.ndarray, output of calculate_returns on benchmark equity
+  timestamps=timestamps,  # recommended — auto-infers periods_per_year
 )
 print(bm_metrics)
 # ============================================================
@@ -1100,10 +1133,10 @@ print(bm_metrics)
 
 ```python
 calculate_benchmark_metrics(
-    strategy_returns,             # np.ndarray of period returns
-    benchmark_returns,            # np.ndarray of period returns
-    periods_per_year=None,        # int or None; when None, auto-inferred from timestamps
-    timestamps=None,              # np.ndarray of int64 nanosecond timestamps
+  strategy_returns,             # np.ndarray of period returns
+  benchmark_returns,            # np.ndarray of period returns
+  periods_per_year=None,        # int or None; when None, auto-inferred from timestamps
+  timestamps=None,              # np.ndarray of int64 nanosecond timestamps
 )
 ```
 
@@ -1145,10 +1178,10 @@ them in `results.benchmark_metrics`. The timestamps from the strategy run are us
 ```python
 # Via run_backtest — benchmark runs automatically
 results = qc.run_backtest(
-    strategy=MyStrategy(),
-    data={'AAPL': bars},
-    initial_capital=100_000.0,
-    benchmark_strategy=qc.BuyAndHold(),
+  strategy=MyStrategy(),
+  data={'AAPL': bars},
+  initial_capital=100_000.0,
+  benchmark_strategy=qc.BuyAndHold(),
 ).compute()
 
 print(results)           # summary includes active return, alpha, beta, IR, capture ratios
@@ -1165,14 +1198,14 @@ print(results.benchmark_metrics)
 
 ```python
 from quantcore.analytics import (
-    calculate_total_return,
-    calculate_annualized_return,
-    calculate_sharpe_ratio,
-    calculate_sortino_ratio,
-    calculate_volatility,
-    calculate_max_drawdown,
-    calculate_calmar_ratio,
-    analyze_trades,
+  calculate_total_return,
+  calculate_annualized_return,
+  calculate_sharpe_ratio,
+  calculate_sortino_ratio,
+  calculate_volatility,
+  calculate_max_drawdown,
+  calculate_calmar_ratio,
+  analyze_trades,
 )
 
 total_return = calculate_total_return(equity)                              # float, %
@@ -1234,15 +1267,15 @@ All plotting functions live in `quantcore.plotting` and return `matplotlib.figur
 
 ```python
 from quantcore.plotting import (
-    plot_equity_curve,
-    plot_benchmark_comparison,
-    plot_underwater,
-    plot_returns_distribution,
-    plot_rolling_metrics,
-    plot_monthly_returns_heatmap,
-    plot_trade_analysis,
-    plot_full_tearsheet,
-    save_all_plots,
+  plot_equity_curve,
+  plot_benchmark_comparison,
+  plot_underwater,
+  plot_returns_distribution,
+  plot_rolling_metrics,
+  plot_monthly_returns_heatmap,
+  plot_trade_analysis,
+  plot_full_tearsheet,
+  save_all_plots,
 )
 ```
 
@@ -1250,13 +1283,13 @@ from quantcore.plotting import (
 
 ```python
 fig = plot_equity_curve(
-    equity_curve=equity,
-    timestamps=timestamps,          # optional, enables date axis
-    title="My Strategy",
-    figsize=(14, 7),
-    show_drawdown=True,             # shade strategy drawdown periods in red
-    benchmark_equity=bm_equity,     # optional, overlays benchmark line
-    benchmark_label="Buy & Hold",   # legend label for the benchmark
+  equity_curve=equity,
+  timestamps=timestamps,          # optional, enables date axis
+  title="My Strategy",
+  figsize=(14, 7),
+  show_drawdown=True,             # shade strategy drawdown periods in red
+  benchmark_equity=bm_equity,     # optional, overlays benchmark line
+  benchmark_label="Buy & Hold",   # legend label for the benchmark
 )
 fig.show()
 ```
@@ -1272,14 +1305,14 @@ in `plot_equity_curve` or `plot_full_tearsheet`.
 
 ```python
 fig = plot_benchmark_comparison(
-    equity_curve=equity,
-    benchmark_equity=bm_equity,
-    timestamps=timestamps,
-    strategy_label="My Strategy",
-    benchmark_label="Buy & Hold",
-    title="Strategy vs Benchmark",
-    figsize=(14, 10),
-    periods_per_year=None,    # auto-inferred from timestamps when None
+  equity_curve=equity,
+  benchmark_equity=bm_equity,
+  timestamps=timestamps,
+  strategy_label="My Strategy",
+  benchmark_label="Buy & Hold",
+  title="Strategy vs Benchmark",
+  figsize=(14, 10),
+  periods_per_year=None,    # auto-inferred from timestamps when None
 )
 fig.show()
 ```
@@ -1320,10 +1353,10 @@ provided, so the Sharpe and volatility scales are correctly annualised:
 
 ```python
 fig = plot_rolling_metrics(
-    returns,
-    timestamps=timestamps,  # required for auto window + correct annualisation
-    window=0,               # 0 = auto-infer from timestamps (~14 calendar days)
-    title="Rolling Metrics"
+  returns,
+  timestamps=timestamps,  # required for auto window + correct annualisation
+  window=0,               # 0 = auto-infer from timestamps (~14 calendar days)
+  title="Rolling Metrics"
 )
 ```
 
@@ -1363,11 +1396,11 @@ the equity curve panel shows both curves normalised to 100:
 import matplotlib.pyplot as plt
 
 fig = plot_full_tearsheet(
-    equity, returns,
-    timestamps=timestamps,
-    title="My Strategy",
-    benchmark_equity=bm_equity,     # optional
-    benchmark_label="Buy & Hold",   # legend label for the benchmark
+  equity, returns,
+  timestamps=timestamps,
+  title="My Strategy",
+  benchmark_equity=bm_equity,     # optional
+  benchmark_label="Buy & Hold",   # legend label for the benchmark
 )
 plt.show(block=True)
 ```
@@ -1380,13 +1413,13 @@ an additional `{strategy_name}_benchmark.png` file is written using
 
 ```python
 save_all_plots(
-    equity_curve=equity,
-    returns=returns,
-    timestamps=timestamps,
-    output_dir='plots',
-    strategy_name='mean_reversion',
-    benchmark_equity=bm_equity,     # optional
-    benchmark_label="Buy & Hold",   # optional
+  equity_curve=equity,
+  returns=returns,
+  timestamps=timestamps,
+  output_dir='plots',
+  strategy_name='mean_reversion',
+  benchmark_equity=bm_equity,     # optional
+  benchmark_label="Buy & Hold",   # optional
 )
 # Writes: mean_reversion_equity.png, _underwater.png, _returns_dist.png,
 #         _rolling.png, _tearsheet.png, _benchmark.png (when benchmark provided)
@@ -1412,8 +1445,8 @@ Generates buy signals when the fast SMA crosses above the slow SMA, sell signals
 
 ```python
 strategy = qc.SMACrossover(
-    fast_period=50,
-    slow_period=200
+  fast_period=50,
+  slow_period=200
 )
 ```
 
@@ -1423,9 +1456,9 @@ Z-score based mean reversion. Buys when price is more than `entry_threshold` sta
 
 ```python
 strategy = qc.MeanReversion(
-    lookback=20,
-    entry_threshold=1.5,
-    exit_threshold=0.5
+  lookback=20,
+  entry_threshold=1.5,
+  exit_threshold=0.5
 )
 
 # After run(), query how many signals were generated
@@ -1438,11 +1471,11 @@ Statistical arbitrage on two correlated assets. Monitors the log spread `log(pri
 
 ```python
 strategy = qc.PairsTrading(
-    symbol1='AAPL',
-    symbol2='MSFT',
-    lookback=60,
-    entry_zscore=2.0,
-    exit_zscore=0.5
+  symbol1='AAPL',
+  symbol2='MSFT',
+  lookback=60,
+  entry_zscore=2.0,
+  exit_zscore=0.5
 )
 
 # Check whether the strategy currently has an open spread position
@@ -1470,11 +1503,11 @@ Inside the strategy, `event.get_symbol()` tells you which asset triggered the ca
 
 ```python
 class MultiAssetStrategy(qc.Strategy):
-    def on_data(self, event):
-        if event.get_symbol() == 'AAPL':
-            pass  # AAPL-specific logic
-        elif event.get_symbol() == 'GOOGL':
-            pass  # GOOGL-specific logic
+  def on_data(self, event):
+    if event.get_symbol() == 'AAPL':
+      pass  # AAPL-specific logic
+    elif event.get_symbol() == 'GOOGL':
+      pass  # GOOGL-specific logic
 ```
 
 Capital is shared across all positions. The position sizer and risk limits apply per-symbol.
@@ -1516,15 +1549,15 @@ bars = qc.load_csv_data('data/aapl.csv', 'AAPL')
 data = {'AAPL': bars}
 
 param_grid = {
-    'fast_period': [10, 20, 50],
-    'slow_period': [100, 150, 200],
+  'fast_period': [10, 20, 50],
+  'slow_period': [100, 150, 200],
 }
 
 opt = GridSearchOptimizer(
-    strategy_factory=qc.SMACrossover,  # must be a class or module-level function, not a lambda
-    param_grid=param_grid,
-    metric='sharpe_ratio',             # 'sharpe_ratio', 'total_return', 'max_drawdown', 'num_trades', or 'final_value'
-    n_jobs=1,                          # set to -1 for all cores (see parallelism note below)
+  strategy_factory=qc.SMACrossover,  # must be a class or module-level function, not a lambda
+  param_grid=param_grid,
+  metric='sharpe_ratio',             # 'sharpe_ratio', 'total_return', 'max_drawdown', 'num_trades', or 'final_value'
+  n_jobs=1,                          # set to -1 for all cores (see parallelism note below)
 )
 
 results = opt.optimize(data, initial_capital=100_000.0, verbose=True)
@@ -1587,17 +1620,17 @@ slow_periods = [100, 150, 200]
 results_grid = {}
 
 for fast, slow in itertools.product(fast_periods, slow_periods):
-    if fast >= slow:
-        continue
+  if fast >= slow:
+    continue
 
-    engine = qc.BacktestEngine(100_000.0)
-    engine.add_data('AAPL', bars)
-    engine.set_strategy(qc.SMACrossover(fast_period=fast, slow_period=slow))
-    engine.run()
+  engine = qc.BacktestEngine(100_000.0)
+  engine.add_data('AAPL', bars)
+  engine.set_strategy(qc.SMACrossover(fast_period=fast, slow_period=slow))
+  engine.run()
 
-    equity  = np.array(engine.get_equity_curve())
-    returns = calculate_returns(equity)
-    results_grid[(fast, slow)] = calculate_sharpe_ratio(returns)
+  equity  = np.array(engine.get_equity_curve())
+  returns = calculate_returns(equity)
+  results_grid[(fast, slow)] = calculate_sharpe_ratio(returns)
 
 best = max(results_grid, key=results_grid.get)
 print(f"Best: SMA({best[0]}/{best[1]}) Sharpe={results_grid[best]:.2f}")
@@ -1620,22 +1653,22 @@ fv2 = engine.run()  # identical to fv1
 from multiprocessing import Pool
 
 def run_single(params):
-    fast, slow = params
-    bars   = qc.load_csv_data('data/aapl.csv', 'AAPL')
-    engine = qc.BacktestEngine(100_000.0)
-    engine.add_data('AAPL', bars)
-    engine.set_strategy(qc.SMACrossover(fast_period=fast, slow_period=slow))
-    engine.run()
-    equity  = np.array(engine.get_equity_curve())
-    returns = calculate_returns(equity)
-    return (fast, slow, calculate_sharpe_ratio(returns))
+  fast, slow = params
+  bars   = qc.load_csv_data('data/aapl.csv', 'AAPL')
+  engine = qc.BacktestEngine(100_000.0)
+  engine.add_data('AAPL', bars)
+  engine.set_strategy(qc.SMACrossover(fast_period=fast, slow_period=slow))
+  engine.run()
+  equity  = np.array(engine.get_equity_curve())
+  returns = calculate_returns(equity)
+  return (fast, slow, calculate_sharpe_ratio(returns))
 
 if __name__ == '__main__':    # required on Windows
-    param_grid = [(f, s) for f in [10, 20, 50] for s in [100, 150, 200] if f < s]
-    with Pool() as pool:
-        results = pool.map(run_single, param_grid)
-    for fast, slow, sharpe in sorted(results, key=lambda x: -x[2]):
-        print(f"SMA({fast}/{slow}): {sharpe:.2f}")
+  param_grid = [(f, s) for f in [10, 20, 50] for s in [100, 150, 200] if f < s]
+  with Pool() as pool:
+    results = pool.map(run_single, param_grid)
+  for fast, slow, sharpe in sorted(results, key=lambda x: -x[2]):
+    print(f"SMA({fast}/{slow}): {sharpe:.2f}")
 ```
 
 ---
@@ -1650,25 +1683,25 @@ Walk-forward analysis validates a strategy by repeatedly optimizing on an in-sam
 
 ```python
 from quantcore.walk_forward import WalkForwardAnalyzer
- 
+
 bars_aapl = qc.load_csv_data('data/aapl.csv', 'AAPL')
 bars_msft = qc.load_csv_data('data/msft.csv', 'MSFT')
 data = {'AAPL': bars_aapl, 'MSFT': bars_msft}
- 
+
 param_grid = {
-    'fast_period': [10, 20, 50],
-    'slow_period': [50, 100, 200],
+  'fast_period': [10, 20, 50],
+  'slow_period': [50, 100, 200],
 }
- 
+
 wfa = WalkForwardAnalyzer(
-    strategy_factory=qc.SMACrossover,
-    param_grid=param_grid,
-    train_size=252,          # bars in each in-sample window
-    test_size=63,            # bars in each out-of-sample window (also the step size)
-    metric='sharpe_ratio',
-    n_jobs=1,
+  strategy_factory=qc.SMACrossover,
+  param_grid=param_grid,
+  train_size=252,          # bars in each in-sample window
+  test_size=63,            # bars in each out-of-sample window (also the step size)
+  metric='sharpe_ratio',
+  n_jobs=1,
 )
- 
+
 result = wfa.analyze(data, initial_capital=100_000.0, verbose=True)
 print(result.summary())
 ```
@@ -1694,8 +1727,8 @@ The combined equity curve is continuous: each OOS segment is rescaled to begin f
 from quantcore.analytics import calculate_all_metrics, calculate_returns
 
 metrics = calculate_all_metrics(
-    result.combined_equity_curve,
-    trade_pnls=result.combined_trade_pnls,
+  result.combined_equity_curve,
+  trade_pnls=result.combined_trade_pnls,
 )
 ```
 
@@ -1719,42 +1752,42 @@ This produces one subplot per parameter showing how the optimal value shifts acr
 ```python
 import numpy as np
 from quantcore.analytics import calculate_sharpe_ratio, calculate_returns
- 
+
 all_bars   = qc.load_csv_data('data/aapl.csv', 'AAPL')
 n_bars     = len(all_bars)
 is_window  = 252
 oos_window = 63
- 
+
 oos_sharpes = []
- 
+
 for start in range(0, n_bars - is_window - oos_window, oos_window):
-    is_bars  = all_bars[start : start + is_window]
-    oos_bars = all_bars[start + is_window : start + is_window + oos_window]
- 
-    # In-sample optimization
-    best_sharpe, best_params = -np.inf, (50, 200)
-    for fast, slow in [(10, 50), (20, 100), (50, 200)]:
-        engine = qc.BacktestEngine(100_000.0)
-        engine.add_data('AAPL', is_bars)
-        engine.set_strategy(qc.SMACrossover(fast, slow))
-        engine.run()
-        eq = np.array(engine.get_equity_curve())
-        sr = calculate_sharpe_ratio(calculate_returns(eq))
-        if sr > best_sharpe:
-            best_sharpe, best_params = sr, (fast, slow)
- 
-    # Out-of-sample evaluation
+  is_bars  = all_bars[start : start + is_window]
+  oos_bars = all_bars[start + is_window : start + is_window + oos_window]
+
+  # In-sample optimization
+  best_sharpe, best_params = -np.inf, (50, 200)
+  for fast, slow in [(10, 50), (20, 100), (50, 200)]:
     engine = qc.BacktestEngine(100_000.0)
-    engine.add_data('AAPL', oos_bars)
-    engine.set_strategy(qc.SMACrossover(*best_params))
+    engine.add_data('AAPL', is_bars)
+    engine.set_strategy(qc.SMACrossover(fast, slow))
     engine.run()
-    eq     = np.array(engine.get_equity_curve())
-    oos_sr = calculate_sharpe_ratio(calculate_returns(eq))
-    oos_sharpes.append(oos_sr)
- 
-    print(f"Period {start}–{start+is_window+oos_window}: "
-          f"best params={best_params}, OOS Sharpe={oos_sr:.2f}")
- 
+    eq = np.array(engine.get_equity_curve())
+    sr = calculate_sharpe_ratio(calculate_returns(eq))
+    if sr > best_sharpe:
+      best_sharpe, best_params = sr, (fast, slow)
+
+  # Out-of-sample evaluation
+  engine = qc.BacktestEngine(100_000.0)
+  engine.add_data('AAPL', oos_bars)
+  engine.set_strategy(qc.SMACrossover(*best_params))
+  engine.run()
+  eq     = np.array(engine.get_equity_curve())
+  oos_sr = calculate_sharpe_ratio(calculate_returns(eq))
+  oos_sharpes.append(oos_sr)
+
+  print(f"Period {start}–{start+is_window+oos_window}: "
+        f"best params={best_params}, OOS Sharpe={oos_sr:.2f}")
+
 print(f"\nMean OOS Sharpe: {np.mean(oos_sharpes):.2f}")
 ```
  
@@ -1768,27 +1801,27 @@ print(f"\nMean OOS Sharpe: {np.mean(oos_sharpes):.2f}")
 
 ```python
 from quantcore.walk_forward import monte_carlo_validation
- 
+
 bars_aapl = qc.load_csv_data('data/aapl.csv', 'AAPL')
 bars_msft = qc.load_csv_data('data/msft.csv', 'MSFT')
 data = {'AAPL': bars_aapl, 'MSFT': bars_msft}
- 
+
 mc_results = monte_carlo_validation(
-    strategy_factory=qc.SMACrossover,
-    params={'fast_period': 20, 'slow_period': 100},
-    data=data,
-    n_simulations=1000,
-    initial_capital=100_000.0,
-    method='bootstrap',   # 'bootstrap' (resample bars with replacement) or 'shuffle' (randomly reorder bars)
-    n_jobs=1,
-    return_equity_curves=False,  # set True to include equity curves in the result dict
+  strategy_factory=qc.SMACrossover,
+  params={'fast_period': 20, 'slow_period': 100},
+  data=data,
+  n_simulations=1000,
+  initial_capital=100_000.0,
+  method='bootstrap',   # 'bootstrap' (resample bars with replacement) or 'shuffle' (randomly reorder bars)
+  n_jobs=1,
+  return_equity_curves=False,  # set True to include equity curves in the result dict
 )
- 
+
 import numpy as np
 sharpes   = mc_results['sharpe_ratios']  # np.ndarray
 returns   = mc_results['returns']        # np.ndarray, DECIMAL format (0.105 = 10.5%)
 drawdowns = mc_results['drawdowns']      # np.ndarray, DECIMAL format (-0.05 = -5%)
- 
+
 print(f"Median Sharpe:   {np.median(sharpes):.2f}")
 print(f"5th pct Sharpe:  {np.percentile(sharpes, 5):.2f}")
 print(f"Median Return:   {np.median(returns):.2%}")
@@ -1809,10 +1842,10 @@ All symbols must have the same number of bars. If they differ, `monte_carlo_vali
 #  of bars for synchronized resampling. Got: AAPL: 252, MSFT: 248.
 #  Align your series to a common date range before running."
 mc_results = monte_carlo_validation(
-    strategy_factory=qc.SMACrossover,
-    params={'fast_period': 20, 'slow_period': 100},
-    data={'AAPL': bars_aapl, 'MSFT': bars_msft},  # must have equal length
-    n_simulations=1000,
+  strategy_factory=qc.SMACrossover,
+  params={'fast_period': 20, 'slow_period': 100},
+  data={'AAPL': bars_aapl, 'MSFT': bars_msft},  # must have equal length
+  n_simulations=1000,
 )
 ```
 
@@ -1837,11 +1870,11 @@ arr = qc.load_tick_parquet('data/aapl_ticks.parquet', use_numpy=True)
 
 ```python
 results = qc.run_tick_backtest(
-    strategy=MyStrategy(),
-    tick_data={'AAPL': ticks},
-    initial_capital=100_000.0,
-    mm_refresh_interval_ns=1_000_000_000,
-    equity_snapshot_interval_ns=60_000_000_000,
+  strategy=MyStrategy(),
+  tick_data={'AAPL': ticks},
+  initial_capital=100_000.0,
+  mm_refresh_interval_ns=1_000_000_000,
+  equity_snapshot_interval_ns=60_000_000_000,
 ).compute()
 
 print(results)
@@ -1920,10 +1953,10 @@ bars = qc.load_parquet_data('data/aapl.parquet', 'AAPL', calendar='NYSE')
 
 ```python
 results = qc.run_backtest(
-    strategy=MyStrategy(),
-    data={'AAPL': bars_aapl, 'MSFT': bars_msft},
-    initial_capital=100_000.0,
-    calendar='NYSE',
+  strategy=MyStrategy(),
+  data={'AAPL': bars_aapl, 'MSFT': bars_msft},
+  initial_capital=100_000.0,
+  calendar='NYSE',
 )
 ```
 
@@ -1940,9 +1973,9 @@ The `calendar` parameter is not available on `run_tick_backtest`. Tick data load
 
 ```python
 cal.filter_bars(
-    bars,
-    strict=False,        # when True, raises if more than max_skip_pct bars are removed
-    max_skip_pct=0.20,   # threshold for strict mode (default 20%)
+  bars,
+  strict=False,        # when True, raises if more than max_skip_pct bars are removed
+  max_skip_pct=0.20,   # threshold for strict mode (default 20%)
 )
 ```
 
