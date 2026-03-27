@@ -156,7 +156,7 @@ Data is loaded into memory upfront. For the scale QuantCore targets this is a de
 
 ## Python Bindings
 
-`python/bindings.cpp` uses pybind11 to expose C++ classes directly. No Python reimplementation of the engine exists. Python strategies run the same C++ loop as C++ strategies.
+`bindings.cpp` uses pybind11 to expose C++ classes directly. No Python reimplementation of the engine exists. Python strategies run the same C++ loop as C++ strategies.
 
 Strategy subclassing works through pybind11's trampoline pattern: the C++ `Strategy` base declares `on_data` and `on_fill` as virtual, and the trampoline class forwards calls from C++ into the Python subclass. This means a Python `on_data` method is called from within the C++ event loop with essentially no marshaling overhead for the event itself.
 

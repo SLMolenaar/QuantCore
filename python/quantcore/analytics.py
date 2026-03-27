@@ -8,6 +8,7 @@ Standard metrics for evaluating strategy performance:
 - Benchmark comparison (alpha, beta, information ratio, capture ratios)
 """
 
+import warnings
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional
@@ -42,13 +43,28 @@ def infer_periods_per_year(timestamps: np.ndarray) -> int:
     if len(positive_gaps) == 0:
         return 252
 
-    median_gap_ns  = float(np.median(positive_gaps))
+    median_gap_ns = float(np.median(positive_gaps))
     if median_gap_ns <= 0:
         return 252
 
-    ns_per_year    = 365.25 * 24 * 3600 * 1_000_000_000
-    periods        = ns_per_year / median_gap_ns
-    return int(np.clip(round(periods), 1, 525_960))
+    ns_per_year = 365.25 * 24 * 3600 * 1_000_000_000
+    periods     = ns_per_year / median_gap_ns
+    rounded     = round(periods)
+    clamped     = int(np.clip(rounded, 1, 525_960))
+
+    if rounded > 525_960:
+        warnings.warn(
+            f"infer_periods_per_year: median snapshot interval is "
+            f"{median_gap_ns / 1e6:.3f} ms, which extrapolates to "
+            f"{rounded:,.0f} periods/year. "
+            f"Clamped to 525,960 (1-minute resolution). "
+            f"Pass periods_per_year explicitly to suppress this warning "
+            f"and ensure correct annualisation.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    return clamped
 
 
 @dataclass
@@ -237,7 +253,7 @@ def calculate_benchmark_metrics(
             down_capture=0.0,
         )
 
-    # Align lengths — use the shorter of the two to avoid index errors.
+    # Align lengths, use the shorter of the two to avoid index errors.
     n = min(len(strategy_returns), len(benchmark_returns))
     s = strategy_returns[:n]
     b = benchmark_returns[:n]
@@ -291,8 +307,8 @@ def calculate_benchmark_metrics(
     # IR = mean(active_returns) / std(active_returns) — not annualised separately
     # because both numerator and denominator scale the same way with period length.
     if tracking_error > 1e-10:
-        # tracking_error is already annualised (%), so annualise the numerator too.
-        information_ratio = (active_return / tracking_error)
+        # tracking_error is already annualised (%), so annualise the numerator too
+        information_ratio = active_return / tracking_error
     else:
         if active_return > 0:
             information_ratio = MAX_RATIO_VALUE
@@ -714,7 +730,7 @@ def rolling_volatility(
     if len(returns) < window:
         return np.array([])
 
-    n = len(returns)
+    n      = len(returns)
     result = np.empty(n - window + 1)
 
     window_returns = returns[:window]
@@ -748,6 +764,7 @@ def _get_month_end_offset() -> str:
     'ME' (month-end) was introduced in pandas 2.2 as replacement for 'M'.
     The old 'M' alias is deprecated in 2.2+ but still works, while 'ME'
     doesn't exist in pandas < 2.2.
+    # TODO: remove after pandas <2.2 support is dropped
     """
     pandas_version = tuple(int(x) for x in pd.__version__.split('.')[:2])
     return 'ME' if pandas_version >= (2, 2) else 'M'
@@ -795,5 +812,5 @@ def underwater_plot_data(equity_curve: np.ndarray) -> np.ndarray:
     the drawdown percentage from the running peak (always <= 0).
     """
     running_max = np.maximum.accumulate(equity_curve)
-    drawdown = (equity_curve - running_max) / running_max * 100.0
+    drawdown    = (equity_curve - running_max) / running_max * 100.0
     return drawdown

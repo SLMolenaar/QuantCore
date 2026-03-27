@@ -410,7 +410,21 @@ class BacktestResults:
             "=" * 60,
             ]
 
-        if self._benchmark_metrics is not None:
+        if self._metrics is None:
+            # compute() has not been called yet — hint at what's available
+            if self.benchmark_equity_curve is not None:
+                lines += [
+                    "",
+                    "  Call .compute() to calculate performance and benchmark metrics.",
+                    "=" * 60,
+                    ]
+            else:
+                lines += [
+                    "",
+                    "  Call .compute() to calculate performance metrics.",
+                    "=" * 60,
+                    ]
+        elif self._benchmark_metrics is not None:
             bm = self._benchmark_metrics
             lines += [
                 "",
