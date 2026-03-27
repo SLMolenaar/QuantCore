@@ -163,6 +163,7 @@ public:
         gfd_orders_.clear();
         pending_strategy_orders_.clear();
         strategy_order_remaining_.clear();
+        pending_stops_.clear();
         last_event_day_          = -1;
         last_equity_snapshot_ns_ = -1;
         mm_last_refresh_.clear();
@@ -264,14 +265,33 @@ public:
     }
 
 private:
+    // -----------------------------------------------------------------------
+    // Internal structs
+    // -----------------------------------------------------------------------
+
     // Tracks the signal-time price and remaining unfilled quantity for each
     // open buy order. Available cash is reduced by sum(price * remaining_qty)
     // so subsequent signals on the same bar are sized against realistic cash.
-    // Decremented on each fill, erased on full fill, cancel, or GFD expiry.
     struct PendingBuy {
         double price_per_share;
         double remaining_qty;
     };
+
+    // A stop or stop-limit order waiting for its trigger price to be touched.
+    // quantity == 0.0 means "close full position" — resolved at trigger time.
+    struct PendingStop {
+        uint64_t    id;           // assigned when registered, used for dedup
+        Side        side;
+        OrderType   order_type;   // Stop or StopLimit
+        double      quantity;     // 0.0 = close full position at trigger time
+        double      stop_price;   // trigger level
+        double      limit_price;  // limit price for StopLimit; 0.0 for Stop
+        int64_t     timestamp_ns; // original signal time (for latency offset)
+    };
+
+    // -----------------------------------------------------------------------
+    // Members
+    // -----------------------------------------------------------------------
 
     // Order pool declared before engines so it outlives all orders placed in it.
     std::pmr::unsynchronized_pool_resource order_pool_;
@@ -320,16 +340,23 @@ private:
     std::unordered_map<uint64_t, PendingBuy>                          pending_buys_;
     std::unordered_map<std::string, std::unordered_set<uint64_t>>     gfd_orders_;
 
-    // Wash trade prevention
+    // --- Wash trade prevention ---
     // Tracks all live unfilled strategy order IDs per symbol so they can be
     // cancelled before a new signal in the opposite direction is placed.
-    // Without this a stale resting buy could self-match against a new sell
-    // if price reverses before the original order fills, triggering the wash
-    // trade guard in ExecutionEngine::update_position().
     std::unordered_map<std::string, std::unordered_set<uint64_t>> pending_strategy_orders_;
-    std::unordered_map<uint64_t, double> strategy_order_remaining_;
+    std::unordered_map<uint64_t, double>                          strategy_order_remaining_;
 
-    int64_t last_event_day_; // UTC day of last market-data event; -1 before first event
+    // --- Stop / Stop-Limit orders ---
+    // Pending stops are checked against price on every handle_md call and
+    // converted to ordinary orders (Market or GoodTillCancel) on trigger.
+    // Key: symbol.  Value: list of stops watching that symbol.
+    std::unordered_map<std::string, std::vector<PendingStop>> pending_stops_;
+
+    // Counter for assigning IDs to PendingStop entries (distinct from
+    // order IDs, used only for internal bookkeeping).
+    uint64_t next_stop_id_ = 1;
+
+    int64_t last_event_day_;
 
     static constexpr size_t  PRICE_HISTORY_BUFFER = 10;
     static constexpr double  MIN_ORDER_QTY        = 1e-8;
@@ -338,6 +365,10 @@ private:
     static int64_t to_unix_day(int64_t timestamp_ns) noexcept {
         return timestamp_ns / NS_PER_DAY;
     }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
 
     double pending_buy_notional() const {
         double total = 0.0;
@@ -359,6 +390,8 @@ private:
     }
 
     // Cancel all live strategy orders for a symbol and clear tracking state.
+    // Called before placing a new signal order, and before firing a stop,
+    // so that stale resting orders cannot self-match.
     void cancel_stale_strategy_orders(const std::string& symbol,
                                       ExecutionEngine& engine) {
         auto it = pending_strategy_orders_.find(symbol);
@@ -371,6 +404,123 @@ private:
             strategy_order_remaining_.erase(stale_id);
         }
         it->second.clear();
+    }
+
+    // Register a strategy order in the wash-trade tracking structures.
+    void track_strategy_order(const std::string& symbol,
+                              uint64_t order_id,
+                              double quantity) {
+        pending_strategy_orders_[symbol].insert(order_id);
+        strategy_order_remaining_[order_id] = quantity;
+    }
+
+    // Return true if a sell stop is triggered (price touched or broke below
+    // stop_price).  For bar data we use the bar's low; for tick data
+    // open == high == low == close so this degrades to price <= stop_price.
+    static bool sell_stop_triggered(double low, double stop_price) noexcept {
+        return low <= stop_price;
+    }
+
+    // Return true if a buy stop is triggered (price touched or broke above).
+    static bool buy_stop_triggered(double high, double stop_price) noexcept {
+        return high >= stop_price;
+    }
+
+    // Drain stop orders emitted by the strategy this bar/tick and register
+    // them in pending_stops_.  Called from handle_md after on_data().
+    void register_new_stop_orders() {
+        auto new_stops = strat_->get_stop_orders();
+        for (auto& s : new_stops) {
+            PendingStop ps;
+            ps.id           = next_stop_id_++;
+            ps.side         = s.side;
+            ps.order_type   = s.order_type;
+            ps.quantity     = s.quantity;
+            ps.stop_price   = s.stop_price;
+            ps.limit_price  = s.limit_price;
+            ps.timestamp_ns = s.timestamp_ns;
+            pending_stops_[s.symbol].push_back(std::move(ps));
+        }
+    }
+
+    // Check all pending stops for a symbol against the current bar/tick
+    // prices and fire any that have been triggered.
+    void check_and_fire_stops(const std::string& symbol,
+                              double high,
+                              double low,
+                              int64_t timestamp_ns) {
+        auto stops_it = pending_stops_.find(symbol);
+        if (stops_it == pending_stops_.end() || stops_it->second.empty())
+            return;
+
+        auto ee_it = engines_.find(symbol);
+        if (ee_it == engines_.end()) return;
+
+        auto& stops  = stops_it->second;
+        auto& engine = *ee_it->second;
+
+        // Iterate with index so we can remove triggered entries in one
+        // erase_if call afterwards.
+        std::vector<bool> triggered(stops.size(), false);
+
+        for (size_t i = 0; i < stops.size(); ++i) {
+            const auto& ps = stops[i];
+
+            bool fire = (ps.side == Side::Sell)
+                ? sell_stop_triggered(low,  ps.stop_price)
+                : buy_stop_triggered (high, ps.stop_price);
+
+            if (!fire) continue;
+            triggered[i] = true;
+
+            // Cancel any stale unfilled strategy orders before placing the
+            // triggered order, for the same wash-trade reason as signals.
+            cancel_stale_strategy_orders(symbol, engine);
+
+            // Resolve quantity: 0.0 means "close full position".
+            double qty = ps.quantity;
+            if (qty < MIN_ORDER_QTY) {
+                qty = std::abs(engine.get_position());
+                if (qty < MIN_ORDER_QTY) continue; // no position to close
+            }
+
+            // Apply latency offset so the triggered order is consistent with
+            // normal signal-to-order timing.
+            int64_t fire_time = timestamp_ns + engine.get_latency_ns();
+
+            if (ps.order_type == OrderType::Stop) {
+                // Convert to a Market order.
+                auto ord = make_event<OrderEvent>(
+                    symbol, fire_time,
+                    ps.side, OrderType::Market,
+                    qty, 0.0
+                );
+                ord->set_order_id(next_oid_++);
+                track_strategy_order(symbol, ord->get_order_id(), qty);
+                eq_.push(ord);
+
+            } else { // StopLimit
+                // Convert to a GoodTillCancel limit at limit_price.
+                auto ord = make_event<OrderEvent>(
+                    symbol, fire_time,
+                    ps.side, OrderType::GoodTillCancel,
+                    qty, ps.limit_price
+                );
+                ord->set_order_id(next_oid_++);
+                if (ps.side == Side::Buy)
+                    pending_buys_[ord->get_order_id()] = {ps.limit_price, qty};
+                track_strategy_order(symbol, ord->get_order_id(), qty);
+                eq_.push(ord);
+            }
+        }
+
+        // Remove triggered stops (erase-remove idiom).
+        size_t i = 0;
+        stops.erase(
+            std::remove_if(stops.begin(), stops.end(),
+                [&](const PendingStop&) { return triggered[i++]; }),
+            stops.end()
+        );
     }
 
     template<typename T, typename... Args>
@@ -427,7 +577,6 @@ private:
 
     void maybe_snapshot_equity(int64_t timestamp) {
         if (equity_snapshot_interval_ns_ == 0) {
-            // Bar mode: snapshot once per bar, after all symbols at this timestamp.
             bool is_last = true;
             if (!eq_.empty()) {
                 auto next = eq_.peek();
@@ -488,7 +637,8 @@ private:
     void flatten_all_positions(int64_t timestamp) {
         halted_ = true;
 
-        // Cancel all pending strategy orders before placing close orders.
+        // Cancel all pending strategy orders and stops before placing close
+        // orders so nothing self-matches against the flatten orders.
         for (auto& [sym, ids] : pending_strategy_orders_) {
             auto ee_it = engines_.find(sym);
             if (ee_it != engines_.end()) {
@@ -500,6 +650,7 @@ private:
             }
         }
         pending_strategy_orders_.clear();
+        pending_stops_.clear();
 
         for (const auto& [symbol, ee] : engines_) {
             double pos = ee->get_position();
@@ -530,6 +681,10 @@ private:
         return false;
     }
 
+    // -----------------------------------------------------------------------
+    // Event handlers
+    // -----------------------------------------------------------------------
+
     void handle_md(EventPtr event) {
         auto md     = std::static_pointer_cast<MarketDataEvent>(event);
         auto symbol = md->get_symbol();
@@ -540,8 +695,7 @@ private:
         if (hist.size() > volatility_lookback_ + PRICE_HISTORY_BUFFER)
             hist.pop_front();
 
-        // Cancel GFD orders at UTC day boundaries. cancel_order() is a no-op
-        // for already-filled orders so this is safe to call unconditionally.
+        // Cancel GFD orders at UTC day boundaries.
         int64_t event_day = to_unix_day(md->get_timestamp());
         if (last_event_day_ >= 0 && event_day > last_event_day_) {
             for (auto& [sym, ids] : gfd_orders_) {
@@ -550,7 +704,6 @@ private:
                     for (uint64_t id : ids) {
                         ee_it->second->cancel_order(id);
                         cancel_pending_buy(id);
-                        // Also remove from strategy order tracking.
                         strategy_order_remaining_.erase(id);
                         pending_strategy_orders_[sym].erase(id);
                     }
@@ -560,6 +713,7 @@ private:
         }
         last_event_day_ = event_day;
 
+        // Refresh market maker quotes.
         auto ee_it = engines_.find(symbol);
         if (ee_it != engines_.end()) {
             auto mm_it = mms_.find(symbol);
@@ -567,9 +721,20 @@ private:
                 mm_it->second->update_quotes(*ee_it->second, *md);
         }
 
+        // Check pending stops for this symbol before calling on_data(), so
+        // that a stop triggered on this bar is processed at this bar's price,
+        // not the next one.
+        check_and_fire_stops(symbol,
+                             md->get_high(), md->get_low(),
+                             md->get_timestamp());
+
+        // Let the strategy react and emit signals / new stop orders.
         strat_->on_data(*md);
 
-        // Sort by add_data() insertion order for deterministic signal processing.
+        // Drain any new stop orders emitted this bar/tick.
+        register_new_stop_orders();
+
+        // Drain signals and push them into the queue in insertion order.
         auto signals = strat_->get_signals();
         std::sort(signals.begin(), signals.end(),
             [this](const std::shared_ptr<SignalEvent>& a,
@@ -607,7 +772,8 @@ private:
         auto ee_it = engines_.find(sig->get_symbol());
         if (ee_it == engines_.end()) return;
 
-        // Cancel any stale unfilled strategy orders for this symbol before placing a new one.
+        // Cancel any stale unfilled strategy orders for this symbol before
+        // placing a new one (wash trade prevention).
         cancel_stale_strategy_orders(sig->get_symbol(), *ee_it->second);
 
         double curr_pos      = ee_it->second->get_position();
@@ -668,11 +834,7 @@ private:
         if (ord_side == Side::Buy)
             pending_buys_[ord->get_order_id()] = {curr_px, ord_qty};
 
-        // Track this order so it can be cancelled if a new signal arrives
-        // before it fills.
-        pending_strategy_orders_[sig->get_symbol()].insert(ord->get_order_id());
-        strategy_order_remaining_[ord->get_order_id()] = ord_qty;
-
+        track_strategy_order(sig->get_symbol(), ord->get_order_id(), ord_qty);
         eq_.push(ord);
     }
 
@@ -687,7 +849,21 @@ private:
         if (ord->is_cancel()) {
             engine->cancel_order(ord->get_order_id());
             cancel_pending_buy(ord->get_order_id());
+            // Clean up wash-trade tracking for explicit cancels.
+            strategy_order_remaining_.erase(ord->get_order_id());
+            pending_strategy_orders_[ord->get_symbol()].erase(ord->get_order_id());
             return;
+        }
+
+        // Stop and StopLimit orders are handled entirely by handle_md and
+        // never reach handle_ord. If one arrives here, it means something
+        // constructed an OrderEvent with those types directly — reject it.
+        if (ord->get_order_type() == OrderType::Stop ||
+            ord->get_order_type() == OrderType::StopLimit) {
+            throw std::runtime_error(
+                "Stop/StopLimit OrderEvents must not be pushed directly into the "
+                "event queue. Use Strategy::generate_stop() or generate_stop_limit()."
+            );
         }
 
         Price    px_cents = static_cast<Price>(ord->get_price() * 100.0);
@@ -714,7 +890,6 @@ private:
                 ? raw_price * (1.0 + slippage_pct)
                 : raw_price * (1.0 - slippage_pct);
 
-            // Strategy orders are takers; always charge taker_fee.
             double commission = fill_price * our_trade.quantity_ * exec_config_.taker_fee;
 
             eq_.push(make_event<FillEvent>(
@@ -731,6 +906,7 @@ private:
         if (fill->get_side() == Side::Buy)
             release_pending_buy(fill->get_order_id(), fill->get_quantity());
 
+        // Update wash-trade tracking: remove the order only when fully filled.
         auto rem_it = strategy_order_remaining_.find(fill->get_order_id());
         if (rem_it != strategy_order_remaining_.end()) {
             rem_it->second -= fill->get_quantity();

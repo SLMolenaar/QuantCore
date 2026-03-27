@@ -39,7 +39,6 @@ public:
         PYBIND11_OVERRIDE(void, Strategy, on_fill, event);
     }
 
-    // Forwards risk-limit rejections to Python subclasses that override on_rejected.
     void on_rejected(const std::string& symbol, const std::string& reason) override {
         PYBIND11_OVERRIDE(void, Strategy, on_rejected, symbol, reason);
     }
@@ -73,6 +72,8 @@ PYBIND11_MODULE(_core, m) {
         .value("MARKET",               OrderType::Market)
         .value("GOOD_FOR_DAY",         OrderType::GoodForDay)
         .value("FILL_OR_KILL",         OrderType::FillOrKill)
+        .value("STOP",                 OrderType::Stop)
+        .value("STOP_LIMIT",           OrderType::StopLimit)
         .export_values();
 
     // ============================================================================
@@ -220,18 +221,15 @@ PYBIND11_MODULE(_core, m) {
         .def("get_unrealized_pnl", &ExecutionEngine::get_unrealized_pnl)
         .def("get_total_pnl",      &ExecutionEngine::get_total_pnl)
         .def("get_total_fees",     &ExecutionEngine::get_total_fees)
-        // get_best_bid and get_best_ask return Price (int32_t cents) in C++.
-        // Divide by 100.0 here so Python callers receive consistent float dollars,
-        // matching every other price value in the API.
         .def("get_best_bid", [](const ExecutionEngine& self) -> double {
             return self.get_best_bid() / 100.0;
         })
         .def("get_best_ask", [](const ExecutionEngine& self) -> double {
             return self.get_best_ask() / 100.0;
         })
-        .def("get_mid_price",      &ExecutionEngine::get_mid_price)
+        .def("get_mid_price",           &ExecutionEngine::get_mid_price)
         .def("get_closed_trade_pnls",   &ExecutionEngine::get_closed_trade_pnls)
-        .def("reset",              &ExecutionEngine::reset);
+        .def("reset",                   &ExecutionEngine::reset);
 
     // ============================================================================
     // STRATEGY
@@ -239,25 +237,64 @@ PYBIND11_MODULE(_core, m) {
 
     py::class_<Strategy, PyStrategy, std::shared_ptr<Strategy>>(m, "Strategy")
         .def(py::init<const std::string&>(), py::arg("name") = "Strategy")
-        .def("on_data",          &Strategy::on_data)
-        .def("on_fill",          &Strategy::on_fill)
-        .def("on_rejected",      &Strategy::on_rejected,
+        .def("on_data",      &Strategy::on_data)
+        .def("on_fill",      &Strategy::on_fill)
+        .def("on_rejected",  &Strategy::on_rejected,
              py::arg("symbol"), py::arg("reason"))
-        .def("get_name",         &Strategy::get_name)
-        .def("get_signals",      &Strategy::get_signals)
-        .def("has_signals",      &Strategy::has_signals)
-        .def("reset",            &Strategy::reset)
-        .def("generate_signal",  &Strategy::generate_signal,
+        .def("get_name",     &Strategy::get_name)
+        .def("get_signals",  &Strategy::get_signals)
+        .def("has_signals",  &Strategy::has_signals)
+        .def("reset",        &Strategy::reset)
+        .def("generate_signal", &Strategy::generate_signal,
              py::arg("symbol"), py::arg("signal_type"),
              py::arg("strength"), py::arg("timestamp_ns"))
-        .def("set_position",     &Strategy::set_position,
+        .def("generate_stop",
+             &Strategy::generate_stop,
+             py::arg("symbol"), py::arg("side"),
+             py::arg("stop_price"), py::arg("quantity"), py::arg("timestamp_ns"),
+             R"doc(
+Place a stop order that triggers a market fill when price touches stop_price.
+
+Args:
+    symbol:       Asset symbol.
+    side:         Side.SELL to protect a long, Side.BUY to protect a short.
+    stop_price:   Trigger price level (positive float).
+    quantity:     Shares to trade. Pass 0.0 to close the full position.
+    timestamp_ns: Current bar/tick timestamp from the MarketDataEvent.
+
+Example:
+    # On entry, place a sell stop 2% below fill price
+    def on_fill(self, fill):
+        if fill.side == qc.Side.BUY:
+            stop = fill.price * 0.98
+            self.generate_stop(fill.symbol, qc.Side.SELL, stop, 0.0, fill.timestamp_ns)
+)doc")
+        .def("generate_stop_limit",
+             &Strategy::generate_stop_limit,
+             py::arg("symbol"), py::arg("side"),
+             py::arg("stop_price"), py::arg("limit_price"),
+             py::arg("quantity"), py::arg("timestamp_ns"),
+             R"doc(
+Place a stop-limit order that converts to a GTC limit at limit_price when
+stop_price is touched.
+
+Args:
+    symbol:       Asset symbol.
+    side:         Side.SELL or Side.BUY.
+    stop_price:   Trigger price level (positive float).
+    limit_price:  Limit price of the resulting order (positive float).
+                  Sell stop-limit: limit_price <= stop_price.
+                  Buy  stop-limit: limit_price >= stop_price.
+    quantity:     Shares to trade. Pass 0.0 to close the full position.
+    timestamp_ns: Current bar/tick timestamp from the MarketDataEvent.
+
+Note: if the market gaps through limit_price the order will not fill.
+Use generate_stop() when guaranteed execution matters more than price.
+)doc")
+        .def("set_position",  &Strategy::set_position,
              py::arg("symbol"), py::arg("quantity"))
-        .def("get_position",     &Strategy::get_position,   py::arg("symbol"))
-        .def("has_position",     &Strategy::has_position,   py::arg("symbol"))
-        // get_portfolio() returns a raw pointer owned by BacktestEngine.
-        // The pointer is null until the engine attaches it at run(), so we
-        // must return py::none() explicitly — pybind11 does not convert a
-        // null raw pointer to None automatically and would raise or segfault.
+        .def("get_position",  &Strategy::get_position,  py::arg("symbol"))
+        .def("has_position",  &Strategy::has_position,  py::arg("symbol"))
         .def("get_portfolio",
              [](Strategy& self) -> py::object {
                  PortfolioContext* p = self.get_portfolio();
@@ -300,18 +337,12 @@ PYBIND11_MODULE(_core, m) {
              py::arg("initial_capital") = 100000.0,
              py::arg("exec_config") = ExecutionConfig())
 
-        // List[BarData] overload — kept for backward compatibility.
+        // List[BarData] overload
         .def("add_data",
              py::overload_cast<const std::string&, const BarSeries&>(&BacktestEngine::add_data),
              py::arg("symbol"), py::arg("bars"))
 
-        // (N, 6) float64 numpy array: [timestamp_ns, open, high, low, close, volume].
-        // One boundary crossing instead of N individual pybind11 object crossings;
-        // roughly 3-5x faster for large datasets.
-        //
-        // Note: timestamp_ns is cast double->int64. float64 has 53-bit mantissa so
-        // timestamps > 2^53 ns (~year 2255) lose sub-microsecond precision — fine
-        // for current-era UNIX nanosecond timestamps.
+        // (N, 6) float64 numpy array: [timestamp_ns, open, high, low, close, volume]
         .def("add_data",
             [](BacktestEngine& self, const std::string& symbol,
                py::array_t<double, py::array::c_style | py::array::forcecast> data) {
@@ -335,13 +366,12 @@ PYBIND11_MODULE(_core, m) {
             },
             py::arg("symbol"), py::arg("data"))
 
-        // List[TickData] overload.
+        // List[TickData] overload
         .def("add_tick_data",
              py::overload_cast<const std::string&, const TickSeries&>(&BacktestEngine::add_tick_data),
              py::arg("symbol"), py::arg("ticks"))
 
-        // (N, 4) float64 numpy array: [timestamp_ns, price, quantity, side].
-        // side encoding: 0.0 = Buy, 1.0 = Sell.
+        // (N, 4) float64 numpy array: [timestamp_ns, price, quantity, side]
         .def("add_tick_data",
             [](BacktestEngine& self, const std::string& symbol,
                py::array_t<double, py::array::c_style | py::array::forcecast> data) {
@@ -366,34 +396,34 @@ PYBIND11_MODULE(_core, m) {
             },
             py::arg("symbol"), py::arg("data"))
 
-        .def("set_strategy",         &BacktestEngine::set_strategy,
+        .def("set_strategy",           &BacktestEngine::set_strategy,
              py::arg("strategy"), py::keep_alive<1, 2>())
-        .def("run",                  &BacktestEngine::run)
-        .def("get_total_pnl",        &BacktestEngine::get_total_pnl)
-        .def("get_total_fees",       &BacktestEngine::get_total_fees)
-        .def("get_trade_pnls",        &BacktestEngine::get_trade_pnls)
-        .def("get_execution_engine", &BacktestEngine::get_execution_engine, py::arg("symbol"))
-        .def("set_position_sizer",   &BacktestEngine::set_position_sizer,  py::arg("sizer"))
-        .def("get_position_sizer",   &BacktestEngine::get_position_sizer)
-        .def("get_equity_curve",     &BacktestEngine::get_equity_curve)
-        .def("get_timestamps",       &BacktestEngine::get_timestamps)
-        .def("set_risk_limits",      &BacktestEngine::set_risk_limits)
-        .def("get_risk_limits",      &BacktestEngine::get_risk_limits)
-        .def("get_risk_manager",     &BacktestEngine::get_risk_manager)
-        .def("get_portfolio_context", &BacktestEngine::get_portfolio_context)
-        .def("set_bars_per_year",    &BacktestEngine::set_bars_per_year,    py::arg("bars_per_year"))
-        .def("get_bars_per_year",    &BacktestEngine::get_bars_per_year)
-        .def("set_volatility_params", &BacktestEngine::set_volatility_params,
+        .def("run",                    &BacktestEngine::run)
+        .def("get_total_pnl",          &BacktestEngine::get_total_pnl)
+        .def("get_total_fees",         &BacktestEngine::get_total_fees)
+        .def("get_trade_pnls",         &BacktestEngine::get_trade_pnls)
+        .def("get_execution_engine",   &BacktestEngine::get_execution_engine, py::arg("symbol"))
+        .def("set_position_sizer",     &BacktestEngine::set_position_sizer,   py::arg("sizer"))
+        .def("get_position_sizer",     &BacktestEngine::get_position_sizer)
+        .def("get_equity_curve",       &BacktestEngine::get_equity_curve)
+        .def("get_timestamps",         &BacktestEngine::get_timestamps)
+        .def("set_risk_limits",        &BacktestEngine::set_risk_limits)
+        .def("get_risk_limits",        &BacktestEngine::get_risk_limits)
+        .def("get_risk_manager",       &BacktestEngine::get_risk_manager)
+        .def("get_portfolio_context",  &BacktestEngine::get_portfolio_context)
+        .def("set_bars_per_year",      &BacktestEngine::set_bars_per_year,    py::arg("bars_per_year"))
+        .def("get_bars_per_year",      &BacktestEngine::get_bars_per_year)
+        .def("set_volatility_params",  &BacktestEngine::set_volatility_params,
              py::arg("default_vol"), py::arg("stop_distance"), py::arg("lookback"))
         .def("configure_market_maker", &BacktestEngine::configure_market_maker,
              py::arg("levels"), py::arg("spread"), py::arg("depth"))
-        .def("set_mm_refresh_interval", &BacktestEngine::set_mm_refresh_interval,
+        .def("set_mm_refresh_interval",      &BacktestEngine::set_mm_refresh_interval,
              py::arg("interval_ns"))
-        .def("get_mm_refresh_interval", &BacktestEngine::get_mm_refresh_interval)
+        .def("get_mm_refresh_interval",      &BacktestEngine::get_mm_refresh_interval)
         .def("set_equity_snapshot_interval", &BacktestEngine::set_equity_snapshot_interval,
              py::arg("interval_ns"))
         .def("get_equity_snapshot_interval", &BacktestEngine::get_equity_snapshot_interval)
-        .def("has_tick_data",        &BacktestEngine::has_tick_data, py::arg("symbol"));
+        .def("has_tick_data",          &BacktestEngine::has_tick_data, py::arg("symbol"));
 
     // ============================================================================
     // POSITION SIZING
@@ -401,25 +431,25 @@ PYBIND11_MODULE(_core, m) {
 
     py::class_<PositionSizingContext>(m, "PositionSizingContext")
         .def(py::init<double, double, double, double, double, double>(),
-             py::arg("signal_strength")    = 1.0,
-             py::arg("current_capital")    = 100000.0,
-             py::arg("current_price")      = 100.0,
-             py::arg("current_position")   = 0.0,
+             py::arg("signal_strength")     = 1.0,
+             py::arg("current_capital")     = 100000.0,
+             py::arg("current_price")       = 100.0,
+             py::arg("current_position")    = 0.0,
              py::arg("portfolio_volatility") = 0.02,
-             py::arg("stop_loss_distance") = 0.05)
-        .def_readwrite("signal_strength",     &PositionSizingContext::signal_strength)
-        .def_readwrite("current_capital",     &PositionSizingContext::current_capital)
-        .def_readwrite("current_price",       &PositionSizingContext::current_price)
-        .def_readwrite("current_position",    &PositionSizingContext::current_position)
-        .def_readwrite("portfolio_volatility",&PositionSizingContext::portfolio_volatility)
-        .def_readwrite("stop_loss_distance",  &PositionSizingContext::stop_loss_distance);
+             py::arg("stop_loss_distance")  = 0.05)
+        .def_readwrite("signal_strength",      &PositionSizingContext::signal_strength)
+        .def_readwrite("current_capital",      &PositionSizingContext::current_capital)
+        .def_readwrite("current_price",        &PositionSizingContext::current_price)
+        .def_readwrite("current_position",     &PositionSizingContext::current_position)
+        .def_readwrite("portfolio_volatility", &PositionSizingContext::portfolio_volatility)
+        .def_readwrite("stop_loss_distance",   &PositionSizingContext::stop_loss_distance);
 
     py::class_<PositionSizer, std::shared_ptr<PositionSizer>>(m, "PositionSizer")
-        .def("calculate_size",        &PositionSizer::calculate_size,     py::arg("context"))
+        .def("calculate_size",        &PositionSizer::calculate_size,        py::arg("context"))
         .def("get_name",              &PositionSizer::get_name)
         .def("set_max_position_size", &PositionSizer::set_max_position_size, py::arg("max_size"))
         .def("set_min_position_size", &PositionSizer::set_min_position_size, py::arg("min_size"))
-        .def("set_max_leverage",      &PositionSizer::set_max_leverage,   py::arg("max_leverage"));
+        .def("set_max_leverage",      &PositionSizer::set_max_leverage,      py::arg("max_leverage"));
 
     py::class_<FixedPercentage, PositionSizer, std::shared_ptr<FixedPercentage>>(m, "FixedPercentage")
         .def(py::init<double>(), py::arg("percentage") = 0.1);
@@ -446,12 +476,12 @@ PYBIND11_MODULE(_core, m) {
     // ============================================================================
 
     py::enum_<RiskCheckResult>(m, "RiskCheckResult")
-        .value("APPROVED",                  RiskCheckResult::APPROVED)
-        .value("REJECTED_POSITION_LIMIT",   RiskCheckResult::REJECTED_POSITION_LIMIT)
-        .value("REJECTED_LEVERAGE_LIMIT",   RiskCheckResult::REJECTED_LEVERAGE_LIMIT)
-        .value("REJECTED_CAPITAL_LIMIT",    RiskCheckResult::REJECTED_CAPITAL_LIMIT)
-        .value("REJECTED_LOSS_LIMIT",       RiskCheckResult::REJECTED_LOSS_LIMIT)
-        .value("REJECTED_ORDER_SIZE",       RiskCheckResult::REJECTED_ORDER_SIZE);
+        .value("APPROVED",                RiskCheckResult::APPROVED)
+        .value("REJECTED_POSITION_LIMIT", RiskCheckResult::REJECTED_POSITION_LIMIT)
+        .value("REJECTED_LEVERAGE_LIMIT", RiskCheckResult::REJECTED_LEVERAGE_LIMIT)
+        .value("REJECTED_CAPITAL_LIMIT",  RiskCheckResult::REJECTED_CAPITAL_LIMIT)
+        .value("REJECTED_LOSS_LIMIT",     RiskCheckResult::REJECTED_LOSS_LIMIT)
+        .value("REJECTED_ORDER_SIZE",     RiskCheckResult::REJECTED_ORDER_SIZE);
 
     py::class_<RiskCheckResponse>(m, "RiskCheckResponse")
         .def(py::init<>())
@@ -472,8 +502,6 @@ PYBIND11_MODULE(_core, m) {
         .def(py::init<>())
         .def(py::init<const RiskLimits&>())
         .def("set_capital",  &RiskManager::set_capital)
-        // price has a C++ default of 0.0; pybind11 requires it to be re-declared
-        // here or Python callers with 2 args get a "too few arguments" error.
         .def("set_position", &RiskManager::set_position,
              py::arg("symbol"), py::arg("quantity"), py::arg("price") = 0.0)
         .def("get_position", &RiskManager::get_position,  py::arg("symbol"))
@@ -481,9 +509,9 @@ PYBIND11_MODULE(_core, m) {
         .def("get_limits",   &RiskManager::get_limits)
         .def("check_order",  &RiskManager::check_order,
              py::arg("symbol"), py::arg("side"), py::arg("quantity"), py::arg("price"))
-        .def("reset",                 &RiskManager::reset)
-        .def("get_all_positions",     &RiskManager::get_all_positions)
-        .def("update_position", &RiskManager::update_position,
+        .def("reset",                    &RiskManager::reset)
+        .def("get_all_positions",        &RiskManager::get_all_positions)
+        .def("update_position",          &RiskManager::update_position,
              py::arg("symbol"), py::arg("side"), py::arg("quantity"))
         .def("calculate_total_exposure", static_cast<double(RiskManager::*)() const>(
              &RiskManager::calculate_total_exposure));
@@ -496,9 +524,9 @@ PYBIND11_MODULE(_core, m) {
         .def(py::init<double>(), py::arg("initial_capital"))
         .def("get_cash",                  &PortfolioContext::get_cash)
         .def("get_initial_capital",       &PortfolioContext::get_initial_capital)
-        .def("get_position",              &PortfolioContext::get_position,       py::arg("symbol"))
-        .def("get_price",                 &PortfolioContext::get_price,          py::arg("symbol"))
-        .def("get_position_value",        &PortfolioContext::get_position_value, py::arg("symbol"))
+        .def("get_position",              &PortfolioContext::get_position,        py::arg("symbol"))
+        .def("get_price",                 &PortfolioContext::get_price,           py::arg("symbol"))
+        .def("get_position_value",        &PortfolioContext::get_position_value,  py::arg("symbol"))
         .def("get_total_position_value",  &PortfolioContext::get_total_position_value)
         .def("get_portfolio_value",       &PortfolioContext::get_portfolio_value)
         .def("get_leverage",              &PortfolioContext::get_leverage)
@@ -506,7 +534,7 @@ PYBIND11_MODULE(_core, m) {
         .def("get_all_positions",         &PortfolioContext::get_all_positions)
         .def("get_all_prices",            &PortfolioContext::get_all_prices)
         .def("num_positions",             &PortfolioContext::num_positions)
-        .def("has_position",              &PortfolioContext::has_position,       py::arg("symbol"));
+        .def("has_position",              &PortfolioContext::has_position,        py::arg("symbol"));
 
     // ============================================================================
     // UTILITY
