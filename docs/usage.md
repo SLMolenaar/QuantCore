@@ -617,6 +617,16 @@ print(results)
 # Net PnL:                $24,310.00
 # Return:                     24.31%
 # ============================================================
+#
+#   Call .compute() to calculate performance metrics.
+# ============================================================
+```
+
+Call `.compute()` to calculate all performance metrics. After that, `print(results)` also shows benchmark-relative metrics when a benchmark equity curve is present:
+
+```python
+results.compute()
+print(results.metrics)   # full PerformanceMetrics block
 ```
 
 Fields:
@@ -1127,7 +1137,7 @@ figures toward zero. With the correct ~525,960 periods-per-year, the same 3.74% 
 BTC gain annualises correctly to ~52%.
 
 **Using benchmark metrics with `BacktestResults`:** when `benchmark_equity_curve` is set
-on a `BacktestResults` object (either from `run_backtest` with benchmark arguments or by
+on a `BacktestResults` object (either from `run_backtest` with a benchmark argument or by
 assigning it manually), `.compute()` calculates benchmark metrics automatically and stores
 them in `results.benchmark_metrics`. The timestamps from the strategy run are used for
 `periods_per_year` inference, so no manual override is needed:
@@ -1303,7 +1313,7 @@ fig = plot_returns_distribution(returns, title="Return Distribution")
 Two-panel chart: rolling Sharpe (top) and rolling volatility (bottom).
 
 The `window` parameter is in **periods**, not calendar days. When `window=0`
-(the default), it is inferred automatically from `timestamps` to span
+(the default), it is inferred from `timestamps` to span
 approximately 14 calendar days, which stays meaningful across daily, minute,
 and tick data. `periods_per_year` is also inferred from `timestamps` when
 provided, so the Sharpe and volatility scales are correctly annualised:
@@ -1347,7 +1357,7 @@ fig = plot_trade_analysis(entry_prices, exit_prices)
 All charts in one figure (equity curve, drawdown, returns distribution,
 rolling Sharpe, rolling volatility). Rolling window and annualisation factor
 are both auto-inferred from `timestamps`. When `benchmark_equity` is supplied
-the equity curve panel overlays both curves normalised to 100:
+the equity curve panel shows both curves normalised to 100:
 
 ```python
 import matplotlib.pyplot as plt
@@ -1670,12 +1680,24 @@ result.in_sample_results        # List[OptimizationResult], best IS result per w
 result.out_of_sample_results    # List[dict], OOS metrics per window
 result.best_params_per_window   # List[dict], winning params per window
 result.combined_equity_curve    # np.ndarray, chained OOS equity curve across all windows
+result.combined_trade_pnls      # List[float], all OOS trade PnLs concatenated in window order
 result.overall_metrics          # dict: sharpe_ratio, total_return, max_drawdown, num_windows
 ```
 
 OOS metrics in `out_of_sample_results` use **decimal format** for `total_return` and `max_drawdown`, consistent with `OptimizationResult`.
 
 The combined equity curve is continuous: each OOS segment is rescaled to begin from the end value of the previous segment, giving a smooth compounded curve across all windows.
+
+`combined_trade_pnls` collects all trade PnLs from the OOS periods in window order. Pass it to `calculate_all_metrics` for accurate win rate, profit factor, and average trade metrics on the combined curve:
+
+```python
+from quantcore.analytics import calculate_all_metrics, calculate_returns
+
+metrics = calculate_all_metrics(
+    result.combined_equity_curve,
+    trade_pnls=result.combined_trade_pnls,
+)
+```
 
 ### Window construction for multi-asset data
 
@@ -1759,6 +1781,7 @@ mc_results = monte_carlo_validation(
     initial_capital=100_000.0,
     method='bootstrap',   # 'bootstrap' (resample bars with replacement) or 'shuffle' (randomly reorder bars)
     n_jobs=1,
+    return_equity_curves=False,  # set True to include equity curves in the result dict
 )
  
 import numpy as np
@@ -1771,6 +1794,8 @@ print(f"5th pct Sharpe:  {np.percentile(sharpes, 5):.2f}")
 print(f"Median Return:   {np.median(returns):.2%}")
 print(f"Worst Drawdown:  {np.min(drawdowns):.2%}")
 ```
+
+When `return_equity_curves=True` the result dict also contains an `equity_curves` key with a `List[np.ndarray]`, one per successful simulation. This is useful for fan-chart visualisations. Simulations always run in-process when this flag is set, since numpy arrays are not efficient to pickle across process boundaries.
 
 ### Multi-asset resampling
 
