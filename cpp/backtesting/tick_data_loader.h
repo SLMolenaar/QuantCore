@@ -176,7 +176,6 @@ private:
         return tick;
     }
 
-    // same heuristic as CSVDataLoader
     static int64_t parse_timestamp(const std::string& ts_str) {
         try {
             int64_t ts = std::stoll(ts_str);

@@ -110,7 +110,6 @@ private:
                 continue;
             }
 
-            // Allocate from BacktestEngine's pool - no malloc, just a free-list pop
             std::pmr::polymorphic_allocator<Order> alloc{order_allocator_};
             auto order = std::allocate_shared<Order>(
                 alloc,

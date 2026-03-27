@@ -14,12 +14,6 @@ Controls engine setup inside every worker. All fields are plain Python
 primitives so it is always picklable. Pass it to GridSearchOptimizer,
 WalkForwardAnalyzer, or monte_carlo_validation to run optimization under
 the same conditions as the production backtest.
-
-Return format
--------------
-total_return and max_drawdown on OptimizationResult use decimal format
-(0.105 = 10.5%). Use the _pct properties or pct_to_decimal/decimal_to_pct
-helpers to convert.
 """
 
 import sys

@@ -34,10 +34,8 @@ namespace quantcore {
             if (has_header) {
                 std::getline(file, line);
                 line_nr++;
-                // Note: do NOT increment data_lines for header
             }
 
-            // main reading loop
             while (std::getline(file, line)) {
                 line_nr++;
                 if (line.empty()) continue;
@@ -55,7 +53,6 @@ namespace quantcore {
                 }
             }
 
-            // Check if too many lines were skipped
             double skip_pct = (data_lines > 0)
                 ? static_cast<double>(bad_lines) / data_lines
                 : 0.0;
@@ -79,7 +76,6 @@ namespace quantcore {
                 throw std::runtime_error("No valid data loaded from file: " + filepath);
             }
 
-            // sort by timestamp (just in case the data isn't sorted already)
             std::sort(bars.begin(), bars.end(),
                       [](const BarData& a, const BarData& b) {
                           return a.timestamp_ns < b.timestamp_ns;

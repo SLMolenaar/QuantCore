@@ -25,7 +25,6 @@ namespace quantcore {
             validate();
         }
 
-        // Get typical price (HLC/3)
         double typical_price() const {
             return (high + low + close) / 3.0;
         }
@@ -44,7 +43,6 @@ namespace quantcore {
 
     private:
         void validate() const {
-            // Validate OHLC relationships
             if (high < low) {
                 throw std::invalid_argument("Bar validation failed: high < low");
             }
@@ -57,7 +55,6 @@ namespace quantcore {
             if (volume < 0) {
                 throw std::invalid_argument("Bar validation failed: negative volume");
             }
-            // Check for reasonable price values
             if (open <= 0 || high <= 0 || low <= 0 || close <= 0) {
                 throw std::invalid_argument("Bar validation failed: non-positive prices");
             }

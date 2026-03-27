@@ -356,7 +356,6 @@ public:
         }
     }
 
-    // CheckAndResetDay() removed from hot path.
     Trades AddOrder(OrderPointer order) {
         if (order->GetOrderType() == OrderType::Market) {
             if (order->GetSide() == Side::Buy && !asks_.empty()) {
@@ -428,7 +427,6 @@ public:
         }
     }
 
-    // CheckAndResetDay() removed from hot path.
     Trades MatchOrder(OrderModify order) {
         if (!orders_.contains(order.GetOrderId())) return {};
         // Copy the order type before CancelOrder erases the entry and destroys the shared_ptr.

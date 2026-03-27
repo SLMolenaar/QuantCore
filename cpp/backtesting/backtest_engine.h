@@ -265,13 +265,7 @@ public:
     }
 
 private:
-    // -----------------------------------------------------------------------
-    // Internal structs
-    // -----------------------------------------------------------------------
-
-    // Tracks the signal-time price and remaining unfilled quantity for each
-    // open buy order. Available cash is reduced by sum(price * remaining_qty)
-    // so subsequent signals on the same bar are sized against realistic cash.
+    // pending buy notional is deducted from available cash when sizing new signals
     struct PendingBuy {
         double price_per_share;
         double remaining_qty;
