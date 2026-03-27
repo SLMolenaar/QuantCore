@@ -55,7 +55,7 @@ All events derive from `Event` (base class holding `EventType` and `int64_t time
 
 `cpp/backtesting/backtest_engine.h`
 
-The main loop. Owns the event queue, one `ExecutionEngine` per symbol, and one `Portfolio`. On each iteration:
+The main loop. Owns the event queue, one `ExecutionEngine` per symbol, and one `PortfolioContext`. On each iteration:
 
 1. Pops the next event.
 2. Routes it to the correct handler.
@@ -77,7 +77,7 @@ Partial fills are native: a limit order that only partially matches produces a `
 
 ### ExecutionEngine
 
-`cpp/backtesting/execution_engine.h`
+`cpp/Execution.h`
 
 Sits between the backtest loop and the order book. Applies:
 
@@ -89,9 +89,9 @@ Tracks position and PnL per symbol.
 
 ### Portfolio
 
-`cpp/backtesting/portfolio.h`
+`cpp/backtesting/portfolio_context.h`
 
-Aggregates positions across all symbols. Maintains the equity curve, realized and unrealized PnL, and total fees. The equity curve is what the Python analytics module consumes.
+Aggregates positions across all symbols via `PortfolioContext`. Maintains mark-to-market values, available cash, and leverage metrics. The equity curve is recorded by `BacktestEngine` and exposed via `get_equity_curve()`.
 
 In bar mode the equity curve has one entry per bar. In tick mode it is sampled at the interval set by `set_equity_snapshot_interval` (default: every tick, which can produce a very dense curve for large tick datasets).
 
@@ -139,9 +139,9 @@ Multiple assets are supported: each `add_data(symbol, bars)` call registers an i
 
 `TickDataLoader` reads tick CSV files into a `TickSeries` (a `std::vector<TickData>`). `TickParquetLoader` (Python-side) reads `.parquet` files. Each `TickData` holds a symbol, timestamp, price, quantity, and aggressor side.
 
-`add_tick_data(symbol, ticks)` registers a tick series. Bar and tick series can be mixed across symbols in the same engine - each symbol uses whichever type was registered for it.
+`add_tick_data(symbol, ticks)` registers a tick series. Bar and tick series can be mixed across symbols in the same engine; each symbol uses whichever type was registered for it.
 
-`TickDataLoader::aggregate_to_bars(ticks, bar_duration_ns)` converts a tick series to OHLCV bars of any duration before passing them to the engine, if a strategy is bar-based.
+`TickDataLoader::aggregate_to_bars(ticks, bar_duration_ns)` (C++) and `qc.aggregate_ticks_to_bars(ticks, bar_duration_ns)` (Python) convert a tick series to OHLCV bars of any duration before passing them to the engine, if a strategy is bar-based.
 
 Two engine settings matter specifically for tick mode:
 
@@ -150,7 +150,7 @@ Two engine settings matter specifically for tick mode:
 
 ### Memory
 
-Data is loaded into memory upfront. For the scale QuantCore targets this is a deliberate trade-off: a year of daily bars is under 20 KB; 10 years of minute bars for one asset is around 35 MB. Tick data is denser - a day of 1-second ticks for one symbol is ~27 KB, a year is ~10 MB - still well within reason for a research workstation.
+Data is loaded into memory upfront. For the scale QuantCore targets this is a deliberate trade-off: a year of daily bars is under 20 KB; 10 years of minute bars for one asset is around 35 MB. Tick data is denser: a day of 1-second ticks for one symbol is ~27 KB, a year is ~10 MB. Both are well within reason for a research workstation.
 
 ---
 
@@ -158,11 +158,11 @@ Data is loaded into memory upfront. For the scale QuantCore targets this is a de
 
 `bindings.cpp` uses pybind11 to expose C++ classes directly. No Python reimplementation of the engine exists. Python strategies run the same C++ loop as C++ strategies.
 
-Strategy subclassing works through pybind11's trampoline pattern: the C++ `Strategy` base declares `on_data` and `on_fill` as virtual, and the trampoline class forwards calls from C++ into the Python subclass. This means a Python `on_data` method is called from within the C++ event loop with essentially no marshaling overhead for the event itself.
+Strategy subclassing works through pybind11's trampoline pattern: the C++ `Strategy` base declares `on_data` and `on_fill` as virtual, and the trampoline class forwards calls from C++ into the Python subclass. A Python `on_data` method is called from within the C++ event loop with no marshaling overhead for the event itself.
 
 Both `add_data` and `add_tick_data` accept either their respective object lists (`List[BarData]`, `List[TickData]`) or numpy arrays (`(N, 6)` and `(N, 4)` float64 respectively). The numpy path uses a single boundary crossing instead of N individual pybind11 object constructions, giving a 3–5x speedup for large datasets.
 
-The `run_backtest()` and `run_tick_backtest()` convenience functions in `python/quantcore/__init__.py` are thin Python wrappers that construct a `BacktestEngine`, load data, attach the strategy, call `engine.run()`, and return a `BacktestResults` object.
+The `run_backtest()` and `run_tick_backtest()` convenience functions in `python/quantcore/__init__.py` construct a `BacktestEngine`, load data, attach the strategy, call `engine.run()`, and return a `BacktestResults` object. Call `.compute()` on the result to calculate performance metrics; if a benchmark equity curve is present, benchmark-relative metrics are calculated at the same time.
 
 ---
 
@@ -172,27 +172,27 @@ The `run_backtest()` and `run_tick_backtest()` convenience functions in `python/
 
 Strategies call `generate_signal(symbol, SignalType, strength, timestamp)`. They do not construct orders. The engine converts signals to orders using the configured `PositionSizer` and `ExecutionConfig`.
 
-This keeps strategies clean (they express intent, not execution mechanics) and makes it trivial to swap position sizing methods without touching strategy code. It also means the same strategy class works for both bar and tick data without modification.
+Strategies express intent rather than execution mechanics, so position sizing can be swapped without touching strategy code. The same strategy class works for both bar and tick data without modification.
 
 ### Single-threaded event loop
 
-The backtest loop is intentionally single-threaded. A multi-threaded loop would require synchronization on the event queue and portfolio state, which adds complexity and makes results harder to reason about. The performance target (1 year of daily data in under 5ms) is comfortably met single-threaded.
+The backtest loop is single-threaded. A multi-threaded loop would require synchronization on the event queue and portfolio state, adding complexity and making results harder to reason about. The performance target (1 year of daily data in under 5ms) is met comfortably single-threaded.
 
-Parallelism is available at a higher level: run multiple independent backtests concurrently (e.g., a parameter sweep) using Python's `multiprocessing`. Each backtest owns its own engine with no shared state.
+Parallelism is available at a higher level: run multiple independent backtests concurrently (e.g. a parameter sweep) using Python's `multiprocessing`. Each backtest owns its own engine with no shared state.
 
 ### Reentrant engine
 
-Calling `run()` resets internal state and reruns from the beginning of the loaded data. This makes parameter sweeps straightforward: configure the engine once, call `run()` in a loop with different strategy parameters, collect results. No need to reconstruct the engine.
+Calling `run()` resets internal state and reruns from the beginning of the loaded data. Configure the engine once, call `run()` in a loop with different strategy parameters, collect results. No need to reconstruct the engine between runs.
 
 ### Order book integration
 
-Rather than a simplified fill model (fill at close price ± slippage), QuantCore routes orders through a real price-time priority order book. This means:
+Rather than a simplified fill model (fill at close price +/- slippage), QuantCore routes orders through a real price-time priority order book:
 
-- Partial fills are handled correctly for limit orders on thin books.
+- Partial fills work correctly for limit orders on thin books.
 - Spread simulation is natural: a market buy fills at the ask, a market sell at the bid.
-- Tick-level strategies (market making, high-frequency mean reversion) can be simulated with realistic fill mechanics.
+- Tick-level strategies (market making, high-frequency mean reversion) get realistic fill mechanics.
 
-The order book is the same codebase as [orderbook-simulator-cpp](https://github.com/SLMolenaar/orderbook-simulator-cpp), which has been independently validated and benchmarked.
+The order book is the same codebase as [orderbook-simulator-cpp](https://github.com/SLMolenaar/orderbook-simulator-cpp).
 
 ### Market maker throttling for tick data
 
@@ -204,6 +204,7 @@ The synthetic market maker that provides liquidity refreshes its quotes by cance
 
 ```
 cpp/
+├── Execution.h                  ExecutionEngine (position tracking, fees, slippage)
 ├── backtesting/
 │   ├── event.h                  Event base class and EventType enum
 │   ├── event_queue.h            Priority queue over EventPtr
@@ -219,7 +220,7 @@ cpp/
 │   ├── market_maker.h           Synthetic liquidity provider
 │   ├── position_sizer.h         Sizing implementations
 │   ├── risk_manager.h           Pre-trade checks
-│   ├── portfolio_context.h      Multi-asset portfolio state
+│   ├── portfolio_context.h      Multi-asset portfolio state (PortfolioContext)
 │   └── strategy.h               Abstract base with trampoline for pybind11
 ├── orderbook/                   Limit order book (price-time priority)
 ├── strategies/
@@ -237,7 +238,11 @@ python/
 │   ├── plotting.py              Matplotlib visualizations
 │   ├── position_sizing.py       Python-side sizing utilities
 │   ├── parquet_loader.py        Parquet ingestion for bar data
-│   └── tick_parquet_loader.py   Parquet ingestion for tick data
+│   ├── tick_parquet_loader.py   Parquet ingestion for tick data
+│   ├── corporate_actions.py     Split and dividend adjustment (CorporateActionsAdjuster)
+│   ├── calendar.py              Trading calendar filter (TradingCalendar)
+│   ├── walk_forward.py          GridSearchOptimizer, WalkForwardAnalyzer, monte_carlo_validation
+│   └── _engine_builder.py       Internal helper: builds BacktestEngine from BacktestConfig
 └── build_module.py              Build helper
 
 benchmarks/
