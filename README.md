@@ -160,6 +160,21 @@ The engine doesn't handle survivorship bias or timezone normalization. Feed it c
 
 ---
 
+## References
+
+Architecture and methodology draws on the following.
+
+**Event-driven design**
+- [QuantStart, Event-Driven Backtesting with Python](https://www.quantstart.com/articles/Event-Driven-Backtesting-with-Python-Part-I/); the series that popularized the signal → order → fill event loop pattern for retail quant backtesting.
+- [Martin Fowler, Event-Driven Architecture](https://martinfowler.com/articles/201701-event-driven.html); good primer on the broader EDA pattern and why a priority queue beats a polling loop.
+
+**Backtesting methodology**
+- [Marcos Lopez de Prado, Advances in Financial Machine Learning (2018)](https://www.wiley.com/en-us/Advances+in+Financial+Machine+Learning-p-9781119482086); chapters 11–12 cover combinatorial purged cross-validation and walk-forward analysis; the basis for how WFA is framed in this library.
+- [Bailey et al., The Deflated Sharpe Ratio (2014)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551); why naive Sharpe optimization overfits and what to do about it. Informed the Monte Carlo validation approach.
+- [Chan, Algorithmic Trading (2013)](https://www.wiley.com/en-us/Algorithmic+Trading%3A+Winning+Strategies+and+Their+Rationale-p-9781118460146); practical treatment of mean reversion, momentum, and WFA for retail-scale strategies.
+
+---
+
 ## License
 
 MIT: see [LICENSE](LICENSE).
