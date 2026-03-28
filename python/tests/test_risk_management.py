@@ -32,28 +32,28 @@ class TestRiskLimits:
     def test_validate_position_pct(self):
         limits = qc.RiskLimits()
         limits.max_position_pct = 1.5
-        limits.validate()  # should not raise, values > 1.0 allow per-asset leverage
+        limits.validate()  # > 1.0 is valid (per-asset leverage)
 
         limits.max_position_pct = 0.0
         with pytest.raises(Exception):
-            limits.validate()  # zero is invalid
+            limits.validate()
 
         limits.max_position_pct = -0.1
         with pytest.raises(Exception):
-            limits.validate()  # negative is invalid
+            limits.validate()
 
     def test_validate_leverage(self):
         limits = qc.RiskLimits()
         limits.max_leverage = 15.0
-        limits.validate()  # should not raise, high leverage is valid if explicitly set
+        limits.validate()
 
         limits.max_leverage = 0.0
         with pytest.raises(Exception):
-            limits.validate()  # zero is invalid
+            limits.validate()
 
         limits.max_leverage = -1.0
         with pytest.raises(Exception):
-            limits.validate()  # negative is invalid
+            limits.validate()
 
 
 class TestRiskManager:
@@ -132,17 +132,9 @@ class TestRiskChecks:
         risk_mgr = qc.RiskManager(limits)
         risk_mgr.set_capital(100000.0, 100000.0)
 
-        # Must supply a price so the notional is tracked for the leverage check.
-        risk_mgr.set_position("AAPL", 500, 100.0)  # notional = 500 * 100 = $50k
-
-        # Adding 300 @ $150 = $45k → total notional $95k → leverage 0.95x < 1.5x, still approved.
-        # Use a price that pushes total notional over the limit instead.
-        # 500 @ $200 = $100k existing, then 300 @ $150 = $45k new → total $145k → 1.45x < 1.5x.
-        # Let's set a tighter notional: 500 @ $250 = $125k existing → leverage 1.25x already.
-        # Then 300 @ $150 = $45k new → total $170k → 1.7x > 1.5x → rejected.
-        risk_mgr.reset()
-        risk_mgr.set_capital(100000.0, 100000.0)
-        risk_mgr.set_position("AAPL", 500, 250.0)  # notional = $125k → 1.25x leverage
+        # Existing: 500 @ $250 = $125k notional (1.25x leverage).
+        # New order: 300 @ $150 = $45k, total $170k = 1.7x > 1.5x limit.
+        risk_mgr.set_position("AAPL", 500, 250.0)
 
         check = risk_mgr.check_order("GOOGL", qc.Side.BUY, 300, 150.0)
 

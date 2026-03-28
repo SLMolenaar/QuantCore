@@ -88,22 +88,22 @@ class TestEvents:
 
     def test_fill_event(self):
         event = qc.FillEvent("AAPL", 1000000000, 123, qc.Side.BUY, 100.0, 150.0, 0.5)
-        assert event.get_symbol()   == "AAPL"
-        assert event.get_order_id() == 123
-        assert event.get_side()     == qc.Side.BUY
-        assert event.get_quantity() == 100.0
-        assert event.get_price()    == 150.0
+        assert event.get_symbol()     == "AAPL"
+        assert event.get_order_id()   == 123
+        assert event.get_side()       == qc.Side.BUY
+        assert event.get_quantity()   == 100.0
+        assert event.get_price()      == 150.0
         assert event.get_commission() == 0.5
 
 
 class TestExecutionEngine:
     def test_create_engine(self):
         engine = qc.ExecutionEngine("AAPL")
-        assert engine.get_position()      == 0.0
-        assert engine.get_realized_pnl()  == 0.0
+        assert engine.get_position()       == 0.0
+        assert engine.get_realized_pnl()   == 0.0
         assert engine.get_unrealized_pnl() == 0.0
-        assert engine.get_total_pnl()     == 0.0
-        assert engine.get_total_fees()    == 0.0
+        assert engine.get_total_pnl()      == 0.0
+        assert engine.get_total_fees()     == 0.0
 
     def test_execution_config(self):
         config = qc.ExecutionConfig()
@@ -130,7 +130,7 @@ class TestStrategies:
 
     def test_mean_reversion(self):
         strategy = qc.MeanReversion(lookback=20, entry_threshold=1.5, exit_threshold=0.5)
-        assert strategy.get_name()        == "MeanReversion"
+        assert strategy.get_name()         == "MeanReversion"
         assert strategy.get_signal_count() == 0
 
 
@@ -182,7 +182,6 @@ class TestHelperFunctions:
         )
 
         assert isinstance(results, qc.BacktestResults)
-
         assert hasattr(results, 'initial_capital')
         assert hasattr(results, 'final_value')
         assert hasattr(results, 'total_pnl')

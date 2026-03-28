@@ -31,18 +31,12 @@ from quantcore.walk_forward import (
     monte_carlo_validation,
 )
 
-
-# ============================================================================
-# HELPERS
-# ============================================================================
-
-SEC = 1_000_000_000  # 1 second in nanoseconds
-DAY = 86_400 * SEC   # 1 day in nanoseconds
+SEC = 1_000_000_000
+DAY = 86_400 * SEC
 
 
 def make_bars(n: int, symbol: str = "A", start_price: float = 100.0,
               base_ts: int = 0, step_ts: int = DAY) -> list:
-    """Create n bars with a gentle upward drift so strategies can generate signals."""
     bars = []
     for i in range(n):
         price = start_price + i * 0.1
@@ -51,19 +45,17 @@ def make_bars(n: int, symbol: str = "A", start_price: float = 100.0,
             base_ts + i * step_ts,
             price, price + 1.0, price - 1.0, price,
             1_000_000.0,
-            ))
+        ))
     return bars
 
 
 def make_multi(n: int, symbols=("A", "B"), base_ts: int = 0) -> dict:
-    """Create aligned bar series for multiple symbols with the same timestamps."""
     return {
         sym: make_bars(n, symbol=sym, start_price=100.0 + i * 10.0, base_ts=base_ts)
         for i, sym in enumerate(symbols)
     }
 
 
-# Picklable factory used by WalkForwardAnalyzer / GridSearchOptimizer in tests.
 class _BuyAndHoldFactory:
     def __call__(self, **_):
         return qc.BuyAndHold()
@@ -71,10 +63,6 @@ class _BuyAndHoldFactory:
     def __reduce__(self):
         return (_BuyAndHoldFactory, ())
 
-
-# ============================================================================
-# FORMAT CONVERTERS
-# ============================================================================
 
 class TestFormatConverters:
     def test_pct_to_decimal(self):
@@ -91,10 +79,6 @@ class TestFormatConverters:
         original = 12.345
         assert decimal_to_pct(pct_to_decimal(original)) == pytest.approx(original)
 
-
-# ============================================================================
-# SERIALISATION HELPERS
-# ============================================================================
 
 class TestSerialisation:
     def test_serialize_deserialize_single_symbol(self):
@@ -136,15 +120,9 @@ class TestSerialisation:
             assert len(d[sym]) == 4
 
 
-# ============================================================================
-# _build_windows
-# ============================================================================
-
 class TestBuildWindows:
     def test_single_symbol_basic_window_count(self):
-        # 10 bars, train=6, test=2.
-        # pos=0: train [0,6), test [6,8)
-        # pos=2: train [2,8), test [8,10)
+        # 10 bars, train=6, test=2: windows at pos 0 and 2
         data    = {"A": make_bars(10)}
         windows = _build_windows(data, train_size=6, test_size=2)
         assert len(windows) == 2
@@ -168,7 +146,6 @@ class TestBuildWindows:
         assert len(windows) == 1
 
     def test_no_bar_shared_between_adjacent_test_windows(self):
-        """Half-open intervals must ensure each bar appears in at most one test window."""
         data    = {"A": make_bars(12)}
         windows = _build_windows(data, train_size=4, test_size=4)
 
@@ -205,11 +182,9 @@ class TestBuildWindows:
             assert len(test["A"])  == len(test["B"])
 
     def test_window_with_gap_in_secondary_symbol_is_skipped(self):
-        """A window where any symbol has no bars must be dropped."""
+        # Symbol B covers only the first 6 timestamps; windows outside that must be dropped.
         ref_bars = make_bars(10, "A", base_ts=0)
-        # Symbol B only covers the first 6 timestamps; the second window's test
-        # period falls outside B's range and must be skipped.
-        b_bars   = make_bars(6, "B", base_ts=0)
+        b_bars   = make_bars(6,  "B", base_ts=0)
         data     = {"A": ref_bars, "B": b_bars}
 
         windows = _build_windows(data, train_size=4, test_size=2)
@@ -219,7 +194,6 @@ class TestBuildWindows:
             assert len(test["B"])  > 0
 
     def test_reference_symbol_is_first_key(self):
-        """Window sizes are measured in bars of the first symbol."""
         data    = make_multi(10, symbols=("REF", "OTHER"))
         windows = _build_windows(data, train_size=6, test_size=2)
 
@@ -227,10 +201,6 @@ class TestBuildWindows:
         for train, _ in windows:
             assert len(train["REF"]) == 6
 
-
-# ============================================================================
-# PARAMETER GRID
-# ============================================================================
 
 class TestParameterGrid:
     def test_single_param(self):
@@ -245,17 +215,11 @@ class TestParameterGrid:
         assert {"a": 2, "b": 20} in grid
 
     def test_len(self):
-        pg = ParameterGrid({"a": [1, 2, 3], "b": [10, 20]})
-        assert len(pg) == 6
+        assert len(ParameterGrid({"a": [1, 2, 3], "b": [10, 20]})) == 6
 
     def test_empty_value_list(self):
-        grid = list(ParameterGrid({"a": []}))
-        assert grid == []
+        assert list(ParameterGrid({"a": []})) == []
 
-
-# ============================================================================
-# OPTIMIZATION RESULT
-# ============================================================================
 
 class TestOptimizationResult:
     def _make(self, total_return=0.105, max_drawdown=-0.05):
@@ -280,13 +244,7 @@ class TestOptimizationResult:
         assert "%" in r or "return" in r.lower()
 
 
-# ============================================================================
-# WALK-FORWARD ANALYSER; SINGLE-ASSET REGRESSION
-# ============================================================================
-
 class TestWalkForwardAnalyzerSingleAsset:
-    """Verify the single-asset path still works correctly after the refactor."""
-
     def _run(self, n_bars=60, train=30, test=10) -> WalkForwardResult:
         return WalkForwardAnalyzer(
             strategy_factory=_BuyAndHoldFactory(),
@@ -301,7 +259,7 @@ class TestWalkForwardAnalyzerSingleAsset:
         assert isinstance(self._run(), WalkForwardResult)
 
     def test_correct_number_of_windows(self):
-        # 60 bars, train=30, test=10 → windows at pos 0, 10, 20 → 3 windows.
+        # 60 bars, train=30, test=10: windows at pos 0, 10, 20
         result = self._run(n_bars=60, train=30, test=10)
         assert len(result.best_params_per_window) == 3
 
@@ -333,12 +291,7 @@ class TestWalkForwardAnalyzerSingleAsset:
         assert "Window"       in summary
 
 
-# ============================================================================
-# WALK-FORWARD ANALYSER; MULTI-ASSET
-# ============================================================================
-
 class TestWalkForwardAnalyzerMultiAsset:
-
     def _run(self, n_bars=60, symbols=("A", "B"), train=30, test=10) -> WalkForwardResult:
         return WalkForwardAnalyzer(
             strategy_factory=_BuyAndHoldFactory(),
@@ -356,7 +309,6 @@ class TestWalkForwardAnalyzerMultiAsset:
         assert isinstance(self._run(symbols=("A", "B", "C")), WalkForwardResult)
 
     def test_window_count_matches_single_asset(self):
-        """Multi-asset produces the same window count as single-asset when series are aligned."""
         kwargs = dict(
             strategy_factory=_BuyAndHoldFactory(),
             param_grid={"": [None]},
@@ -378,26 +330,19 @@ class TestWalkForwardAnalyzerMultiAsset:
         for oos in self._run().out_of_sample_results:
             for key in ("sharpe_ratio", "total_return", "max_drawdown", "num_trades", "final_value"):
                 assert key in oos
-            # equity_curve must have been popped before storing
-            assert "equity_curve" not in oos
+            assert "equity_curve" not in oos  # must be popped before storing
 
     def test_no_warning_raised_for_multi_asset(self):
-        """The old code emitted a UserWarning for len(data) > 1. That must be gone."""
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            self._run()  # must not raise any warning
+            self._run()
 
     def test_combined_equity_curve_is_all_finite(self):
         curve = self._run(n_bars=80, train=30, test=10).combined_equity_curve
         assert np.all(np.isfinite(curve))
 
 
-# ============================================================================
-# MONTE CARLO VALIDATION; SINGLE ASSET
-# ============================================================================
-
 class TestMonteCarloSingleAsset:
-
     def _run(self, method="bootstrap", n=20):
         return monte_carlo_validation(
             strategy_factory=qc.BuyAndHold,
@@ -415,11 +360,10 @@ class TestMonteCarloSingleAsset:
             assert key in result
 
     def test_output_lengths_match_n_simulations(self):
-        n      = 15
-        result = self._run(n=n)
-        assert len(result["sharpe_ratios"]) == n
-        assert len(result["returns"])       == n
-        assert len(result["drawdowns"])     == n
+        result = self._run(n=15)
+        assert len(result["sharpe_ratios"]) == 15
+        assert len(result["returns"])       == 15
+        assert len(result["drawdowns"])     == 15
 
     def test_all_outputs_are_finite(self):
         result = self._run(n=10)
@@ -443,9 +387,7 @@ class TestMonteCarloSingleAsset:
             )
 
     def test_returns_in_decimal_format(self):
-        """Returns must be in decimal format, not percentage."""
         result = self._run(n=20)
-        # BuyAndHold on a mild drift series stays well within ±2 in decimal terms.
         assert np.all(np.abs(result["returns"]) < 2.0)
 
     def test_drawdowns_are_non_positive(self):
@@ -453,17 +395,11 @@ class TestMonteCarloSingleAsset:
         assert np.all(result["drawdowns"] <= 1e-9)
 
     def test_different_seeds_produce_varied_results(self):
-        """Each simulation uses a distinct seed; results must not all be identical."""
         result = self._run(n=20)
         assert len(set(result["returns"].tolist())) > 1
 
 
-# ============================================================================
-# MONTE CARLO VALIDATION; MULTI-ASSET
-# ============================================================================
-
 class TestMonteCarloMultiAsset:
-
     def _aligned(self, n=50, symbols=("A", "B")):
         return make_multi(n, symbols=symbols)
 
@@ -488,7 +424,6 @@ class TestMonteCarloMultiAsset:
         assert len(result["returns"]) == 10
 
     def test_misaligned_bar_counts_raises(self):
-        """Different bar counts must raise ValueError, not silently truncate."""
         with pytest.raises(ValueError, match="same number of bars"):
             monte_carlo_validation(
                 strategy_factory=qc.BuyAndHold,
@@ -512,7 +447,6 @@ class TestMonteCarloMultiAsset:
         assert "30" in msg
 
     def test_no_warning_for_multi_asset(self):
-        """The old code warned when len(data) > 1. That must be gone."""
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             monte_carlo_validation(
@@ -524,7 +458,6 @@ class TestMonteCarloMultiAsset:
             )
 
     def test_result_structure_matches_single_asset(self):
-        """Result dict shape is identical regardless of asset count."""
         single = monte_carlo_validation(
             strategy_factory=qc.BuyAndHold, params={},
             data={"A": make_bars(40)}, n_simulations=5, n_jobs=1,
@@ -549,10 +482,6 @@ class TestMonteCarloMultiAsset:
         for key in ("sharpe_ratios", "returns", "drawdowns"):
             assert np.all(np.isfinite(result[key]))
 
-
-# ============================================================================
-# GRID SEARCH OPTIMIZER; MULTI-ASSET SMOKE TEST
-# ============================================================================
 
 class TestGridSearchOptimizerMultiAsset:
     def test_multi_asset_data_accepted_and_returns_results(self):

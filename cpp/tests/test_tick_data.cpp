@@ -10,17 +10,13 @@
 
 using namespace quantcore;
 
-// ============================================================================
-// TickData
-// ============================================================================
-
 TEST(TickData, ConstructorSetsFields) {
     TickData tick("AAPL", 1000000000LL, 150.0, 10.0, Side::Buy);
-    EXPECT_EQ(tick.symbol,         "AAPL");
-    EXPECT_EQ(tick.timestamp_ns,   1000000000LL);
-    EXPECT_DOUBLE_EQ(tick.price,   150.0);
+    EXPECT_EQ(tick.symbol,          "AAPL");
+    EXPECT_EQ(tick.timestamp_ns,    1000000000LL);
+    EXPECT_DOUBLE_EQ(tick.price,    150.0);
     EXPECT_DOUBLE_EQ(tick.quantity, 10.0);
-    EXPECT_EQ(tick.aggressor_side, Side::Buy);
+    EXPECT_EQ(tick.aggressor_side,  Side::Buy);
 }
 
 TEST(TickData, DefaultSideIsBuy) {
@@ -29,18 +25,14 @@ TEST(TickData, DefaultSideIsBuy) {
 }
 
 TEST(TickData, ThrowsOnNonPositivePrice) {
-    EXPECT_THROW(TickData("AAPL", 1000000000LL, 0.0,  1.0), std::invalid_argument);
+    EXPECT_THROW(TickData("AAPL", 1000000000LL,  0.0, 1.0), std::invalid_argument);
     EXPECT_THROW(TickData("AAPL", 1000000000LL, -1.0, 1.0), std::invalid_argument);
 }
 
 TEST(TickData, ThrowsOnZeroQuantity) {
-    EXPECT_THROW(TickData("AAPL", 1000000000LL, 100.0, 0.0),   std::invalid_argument);
-    EXPECT_THROW(TickData("AAPL", 1000000000LL, 100.0, -1e-9), std::invalid_argument);
+    EXPECT_THROW(TickData("AAPL", 1000000000LL, 100.0,  0.0),   std::invalid_argument);
+    EXPECT_THROW(TickData("AAPL", 1000000000LL, 100.0, -1e-9),  std::invalid_argument);
 }
-
-// ============================================================================
-// TickDataLoader - aggregate_to_bars
-// ============================================================================
 
 namespace {
 
@@ -66,38 +58,36 @@ TEST(TickDataLoader, AggregateEmpty) {
 
 TEST(TickDataLoader, AggregateInvalidDuration) {
     auto ticks = make_ticks("X", 0, 1'000'000, {100.0});
-    EXPECT_THROW(TickDataLoader::aggregate_to_bars(ticks, 0),  std::invalid_argument);
+    EXPECT_THROW(TickDataLoader::aggregate_to_bars(ticks,  0), std::invalid_argument);
     EXPECT_THROW(TickDataLoader::aggregate_to_bars(ticks, -1), std::invalid_argument);
 }
 
 TEST(TickDataLoader, AggregateMixedSymbolsThrows) {
     TickSeries mixed;
-    mixed.emplace_back("AAPL", 0LL,              100.0, 10.0);
-    mixed.emplace_back("MSFT", 1'000'000'000LL,  200.0, 10.0);
+    mixed.emplace_back("AAPL", 0LL,             100.0, 10.0);
+    mixed.emplace_back("MSFT", 1'000'000'000LL, 200.0, 10.0);
     EXPECT_THROW(TickDataLoader::aggregate_to_bars(mixed, 60'000'000'000LL),
                  std::invalid_argument);
 }
 
 TEST(TickDataLoader, AggregateSingleBar) {
-    // four ticks inside one 1-minute bar
-    // base is aligned to a bar boundary to guarantee all ticks fall in the same bucket
-    int64_t bar_dur = 60'000'000'000LL;  // 1 min
+    int64_t bar_dur = 60'000'000'000LL;
     int64_t base    = 1'000'000'000'000'000'000LL;
-    base = (base / bar_dur) * bar_dur;   // snap to bar boundary
+    base = (base / bar_dur) * bar_dur;
     auto ticks = make_ticks("AAPL", base, 10'000'000'000LL, {100.0, 105.0, 98.0, 102.0});
 
     auto bars = TickDataLoader::aggregate_to_bars(ticks, bar_dur);
     ASSERT_EQ(bars.size(), 1u);
-    EXPECT_DOUBLE_EQ(bars[0].open,  100.0);
-    EXPECT_DOUBLE_EQ(bars[0].high,  105.0);
-    EXPECT_DOUBLE_EQ(bars[0].low,    98.0);
-    EXPECT_DOUBLE_EQ(bars[0].close, 102.0);
-    EXPECT_DOUBLE_EQ(bars[0].volume, 400.0); // 4 * 100
+    EXPECT_DOUBLE_EQ(bars[0].open,   100.0);
+    EXPECT_DOUBLE_EQ(bars[0].high,   105.0);
+    EXPECT_DOUBLE_EQ(bars[0].low,     98.0);
+    EXPECT_DOUBLE_EQ(bars[0].close,  102.0);
+    EXPECT_DOUBLE_EQ(bars[0].volume, 400.0);
 }
 
 TEST(TickDataLoader, AggregateMultipleBars) {
     int64_t bar_dur  = 60'000'000'000LL;
-    int64_t tick_gap = 20'000'000'000LL; // 20s apart, 3 ticks per bar
+    int64_t tick_gap = 20'000'000'000LL;
 
     auto ticks = make_ticks("MSFT", 0, tick_gap,
                             {10, 12, 11,   // bar 0
@@ -117,10 +107,6 @@ TEST(TickDataLoader, AggregateMultipleBars) {
     EXPECT_DOUBLE_EQ(bars[1].close, 10.0);
 }
 
-// ============================================================================
-// TickDataLoader - CSV loading
-// ============================================================================
-
 namespace {
 
 std::string write_temp_csv(const std::string& content) {
@@ -133,7 +119,6 @@ std::string write_temp_csv(const std::string& content) {
 } // anonymous namespace
 
 TEST(TickDataLoader, LoadCSV3Columns) {
-    // seconds timestamp, price, quantity
     auto path = write_temp_csv(
         "timestamp,price,qty\n"
         "1700000000,100.5,10\n"
@@ -144,7 +129,6 @@ TEST(TickDataLoader, LoadCSV3Columns) {
     EXPECT_DOUBLE_EQ(ticks[0].price,    100.5);
     EXPECT_DOUBLE_EQ(ticks[0].quantity, 10.0);
     EXPECT_DOUBLE_EQ(ticks[1].price,    101.0);
-    // seconds -> nanoseconds conversion
     EXPECT_EQ(ticks[0].timestamp_ns, 1700000000LL * 1'000'000'000LL);
 }
 
@@ -178,13 +162,8 @@ TEST(TickDataLoader, LoadCSVThrowsOnEmpty) {
     EXPECT_THROW(TickDataLoader::load(path, "TEST"), std::runtime_error);
 }
 
-// ============================================================================
-// BacktestEngine tick integration
-// ============================================================================
-
 namespace {
 
-// Records which prices on_data was called with.
 class PriceRecorder : public Strategy {
 public:
     PriceRecorder() : Strategy("PriceRecorder") {}
@@ -203,9 +182,9 @@ TEST(BacktestEngine, AddTickDataBasicRun) {
     BacktestEngine engine(10000.0);
 
     TickSeries ticks;
-    ticks.emplace_back("AAPL", 1'000'000'000LL,  100.0, 10.0);
-    ticks.emplace_back("AAPL", 2'000'000'000LL,  101.0, 10.0);
-    ticks.emplace_back("AAPL", 3'000'000'000LL,  102.0, 10.0);
+    ticks.emplace_back("AAPL", 1'000'000'000LL, 100.0, 10.0);
+    ticks.emplace_back("AAPL", 2'000'000'000LL, 101.0, 10.0);
+    ticks.emplace_back("AAPL", 3'000'000'000LL, 102.0, 10.0);
 
     engine.add_tick_data("AAPL", ticks);
     engine.set_strategy(strat);
@@ -228,7 +207,7 @@ TEST(BacktestEngine, AddTickDataClearsBarData) {
 
     TickSeries ticks;
     ticks.emplace_back("AAPL", 2'000'000'000LL, 105.0, 10.0);
-    engine.add_tick_data("AAPL", ticks); // should replace bar data
+    engine.add_tick_data("AAPL", ticks);
 
     EXPECT_TRUE(engine.has_tick_data("AAPL"));
 }
@@ -242,7 +221,7 @@ TEST(BacktestEngine, AddBarDataClearsTickData) {
 
     BarSeries bars;
     bars.emplace_back("AAPL", 2'000'000'000LL, 99.0, 101.0, 98.0, 100.0, 1000.0);
-    engine.add_data("AAPL", bars); // should replace tick data
+    engine.add_data("AAPL", bars);
 
     EXPECT_FALSE(engine.has_tick_data("AAPL"));
 }
@@ -273,18 +252,15 @@ TEST(BacktestEngine, EquitySnapshotIntervalReducesSnapshots) {
     auto strat = std::make_shared<PriceRecorder>();
     BacktestEngine engine(10000.0);
 
-    // 100 ticks, one per second
     TickSeries ticks;
     for (int i = 0; i < 100; ++i)
         ticks.emplace_back("X", static_cast<int64_t>(i) * 1'000'000'000LL, 100.0, 1.0);
 
     engine.add_tick_data("X", ticks);
     engine.set_strategy(strat);
-    // snapshot every 10 seconds, should get ~10 snapshots instead of 100
     engine.set_equity_snapshot_interval(10'000'000'000LL);
     engine.run();
 
-    // initial snapshot + ~10 interval snapshots; well under 100
     EXPECT_LT(engine.get_equity_curve().size(), 20u);
 }
 
