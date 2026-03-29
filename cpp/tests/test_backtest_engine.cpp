@@ -290,33 +290,32 @@ TEST_F(BacktestEngineTest, TotalPnlEqualsAggregatedSymbolPnl) {
 }
 
 TEST_F(BacktestEngineTest, FixedPercentageProducesEqualDollarPnlAcrossPrices) {
-    // FixedPercentage allocates a fixed fraction of capital in dollar terms.
-    // A $100 asset with a +$1/bar move and a $200 asset with a +$2/bar move
-    // both represent the same percentage return per bar, so with the same
-    // allocation fraction the absolute dollar PnL must be equal (modulo fees,
-    // which are also identical since notional is the same).
-    //
-    // cheap: 50000/100 = 500 shares, 49-bar move of $1 -> $24,500 gross
-    // expensive: 50000/200 = 250 shares, 49-bar move of $2 -> $24,500 gross
+    // Scale everything by the same factor. z-scores are invariant to scale
+    // so MeanReversion fires on identical bars with proportional sizes.
+    // Realized PnL (closed trades only) must then be exactly equal.
+    auto run = [&](double scale) -> double {
+        BacktestEngine eng(INITIAL_CAPITAL);
+        RiskLimits lim; lim.enabled = false;
+        eng.set_risk_limits(lim);
+        BarSeries bars;
+        for (int i = 0; i < 100; ++i) {
+            double p = (100.0 + 5.0 * std::sin(i * 0.3)) * scale;
+            bars.push_back(BarData("TEST",
+                static_cast<int64_t>(i) * 1'000'000'000LL,
+                p, p + scale, p - scale, p, 1'000'000.0));
+        }
+        eng.add_data("TEST", bars);
+        eng.set_strategy(std::make_shared<MeanReversion>(10, 1.0, 0.3));
+        eng.set_position_sizer(std::make_shared<FixedPercentage>(0.5));
+        eng.run();
+        return eng.get_execution_engine("TEST")->get_realized_pnl();
+    };
 
-    BacktestEngine engine_cheap(INITIAL_CAPITAL);
-    engine_cheap.set_risk_limits([]{ RiskLimits l; l.enabled = false; return l; }());
-    engine_cheap.add_data("TEST", create_uptrend_bars(50, 100.0, 1.0));
-    engine_cheap.set_strategy(std::make_shared<BuyAndHold>());
-    engine_cheap.set_position_sizer(std::make_shared<FixedPercentage>(0.5));
-    engine_cheap.run();
+    double cheap_realized = run(1.0);
+    double exp_realized   = run(2.0);
 
-    BacktestEngine engine_exp(INITIAL_CAPITAL);
-    engine_exp.set_risk_limits([]{ RiskLimits l; l.enabled = false; return l; }());
-    engine_exp.add_data("TEST", create_uptrend_bars(50, 200.0, 2.0));
-    engine_exp.set_strategy(std::make_shared<BuyAndHold>());
-    engine_exp.set_position_sizer(std::make_shared<FixedPercentage>(0.5));
-    engine_exp.run();
-
-    EXPECT_GT(engine_cheap.get_total_pnl(), 0.0);
-    EXPECT_GT(engine_exp.get_total_pnl(), 0.0);
-    // Dollar PnL must be equal; allow 0.01 tolerance for floating-point rounding
-    EXPECT_NEAR(engine_cheap.get_total_pnl(), engine_exp.get_total_pnl(), 0.01);
+    EXPECT_NE(cheap_realized, 0.0) << "No trades occurred";
+    EXPECT_NEAR(cheap_realized, exp_realized, 0.01);
 }
 
 TEST_F(BacktestEngineTest, LargerAllocationProducesLargerPosition) {
