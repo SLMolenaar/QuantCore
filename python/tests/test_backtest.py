@@ -327,5 +327,8 @@ class TestMarketMakerRegression:
 
     @pytest.mark.parametrize("spread", [0.0, 1e-6, 1e-5])
     def test_tight_spread_still_fills(self, spread):
-        eng = self._run(spread)  # keep alive: get_execution_engine() borrows from it
-        assert eng.get_execution_engine("A").get_position() > 0
+        assert self._run(spread).get_execution_engine("A").get_position() > 0
+
+    def test_execution_engine_outlives_temporary_engine(self):
+        ee = self._run(0.0001).get_execution_engine("A")
+        assert ee.get_position() > 0

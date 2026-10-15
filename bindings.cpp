@@ -473,7 +473,8 @@ Use generate_stop() when guaranteed execution matters more than price.
         .def("get_total_pnl",          &BacktestEngine::get_total_pnl)
         .def("get_total_fees",         &BacktestEngine::get_total_fees)
         .def("get_trade_pnls",         &BacktestEngine::get_trade_pnls)
-        .def("get_execution_engine",   &BacktestEngine::get_execution_engine, py::arg("symbol"))
+        .def("get_execution_engine",   &BacktestEngine::get_execution_engine, py::arg("symbol"),
+             py::keep_alive<0, 1>())  // orders live in the engine's memory pool
         .def("set_position_sizer",     &BacktestEngine::set_position_sizer,   py::arg("sizer"))
         .def("get_position_sizer",     &BacktestEngine::get_position_sizer)
         .def("get_equity_curve",       &BacktestEngine::get_equity_curve)
@@ -481,7 +482,7 @@ Use generate_stop() when guaranteed execution matters more than price.
         .def("set_risk_limits",        &BacktestEngine::set_risk_limits)
         .def("get_risk_limits",        &BacktestEngine::get_risk_limits)
         .def("get_risk_manager",       &BacktestEngine::get_risk_manager)
-        .def("get_portfolio_context",  &BacktestEngine::get_portfolio_context)
+        .def("get_portfolio_context",  &BacktestEngine::get_portfolio_context, py::keep_alive<0, 1>())
         .def("set_bars_per_year",      &BacktestEngine::set_bars_per_year,    py::arg("bars_per_year"))
         .def("get_bars_per_year",      &BacktestEngine::get_bars_per_year)
         .def("set_fill_mode",          &BacktestEngine::set_fill_mode, py::arg("mode"))
