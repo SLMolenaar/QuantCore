@@ -1,7 +1,7 @@
 """Cross-check QuantCore against Backtrader on an identical SMA crossover.
 
 Both engines trade next-bar-open, no fees, same share count, so trade count,
-per-trade PnL and final equity should agree (within market-maker spread).
+per-trade PnL and final equity should agree (within the market maker's one-cent quote floor).
 """
 import sys
 from pathlib import Path
@@ -57,7 +57,7 @@ def _run_qc(o, h, l, c):
     cfg = qc.ExecutionConfig()
     cfg.maker_fee = cfg.taker_fee = cfg.slippage_pct = 0.0
     eng = qc.BacktestEngine(CASH, cfg)
-    eng.configure_market_maker(levels=5, spread=0.0001, depth=1_000_000)
+    eng.configure_market_maker(levels=5, spread=0.0, depth=1_000_000)
     eng.set_fill_mode(qc.FillMode.NEXT_BAR_OPEN)
     eng.set_position_sizer(qc.FixedShares(SIZE))
     eng.add_data("A", bars)
@@ -102,10 +102,10 @@ def test_sma_crossover_matches_backtrader():
     qc_pnls = list(eng.get_trade_pnls())
     assert len(qc_pnls) >= 5
     assert len(qc_pnls) == len(bt_pnls)
-    # QC fills on a cent grid around a synthetic market maker's spread, so allow a few
-    # cents/share of round-trip difference; a real accounting or timing bug is orders larger.
-    assert qc_pnls == pytest.approx(bt_pnls, abs=0.001 * SIZE * 100)
-    assert eng.get_equity_curve()[-1] == pytest.approx(bt_value, abs=len(qc_pnls) * 10)
+    # QC fills at least one cent through the open (its market maker's quote floor), i.e.
+    # up to ~$2 per 100-share round trip; a real accounting or timing bug is orders larger.
+    assert qc_pnls == pytest.approx(bt_pnls, abs=0.035 * SIZE)
+    assert eng.get_equity_curve()[-1] == pytest.approx(bt_value, abs=len(qc_pnls) * 0.035 * SIZE)
 
 
 def test_accounting_identity_over_many_trades():

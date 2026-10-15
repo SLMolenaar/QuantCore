@@ -294,3 +294,38 @@ class TestCashBalance:
 
     def test_cash_balance_starts_at_initial_capital(self):
         assert qc.PortfolioContext(50_000.0).get_cash_balance() == 50_000.0
+
+
+class TestMarketMakerRegression:
+    def _run(self, spread):
+        eng = qc.BacktestEngine(100_000.0)
+        eng.configure_market_maker(levels=5, spread=spread, depth=100_000)
+        DAY = 86_400 * 1_000_000_000
+        eng.add_data("A", [qc.BarData("A", (i + 1) * DAY, 100, 101, 99, 100, 1e6) for i in range(6)])
+
+        class Once(qc.Strategy):
+            def __init__(self):
+                super().__init__("Once")
+                self.n = 0
+
+            def on_data(self, e):
+                if self.n == 0:
+                    self.generate_signal("A", qc.SignalType.BUY, 1.0, e.timestamp_ns)
+                self.n += 1
+
+            def reset(self):
+                super().reset()
+                self.n = 0
+
+        eng.set_strategy(Once())
+        eng.run()
+        return eng
+
+    def test_runs_are_reproducible(self):
+        vals = {self._run(0.0001).get_equity_curve()[-1] for _ in range(4)}
+        assert len(vals) == 1
+
+    @pytest.mark.parametrize("spread", [0.0, 1e-6, 1e-5])
+    def test_tight_spread_still_fills(self, spread):
+        eng = self._run(spread)  # keep alive: get_execution_engine() borrows from it
+        assert eng.get_execution_engine("A").get_position() > 0

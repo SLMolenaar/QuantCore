@@ -712,8 +712,8 @@ private:
             if (px_it == last_px_.end()) continue;
             Side   side   = (pos > 0) ? Side::Sell : Side::Buy;
             double ord_px = (side == Side::Buy)
-                ? px_it->second * (1.0 + mm_spread_)
-                : px_it->second * (1.0 - mm_spread_);
+                ? std::max(px_it->second * (1.0 + mm_spread_), px_it->second + 0.01)
+                : std::min(px_it->second * (1.0 - mm_spread_), px_it->second - 0.01);
             auto ord = make_event<OrderEvent>(
                 symbol, timestamp, side, OrderType::GoodTillCancel,
                 std::abs(pos), ord_px
@@ -894,8 +894,9 @@ private:
         if (mm_it != mms_.end()) spread = mm_it->second->get_spread();
 
         double ord_px = (ord_side == Side::Buy)
-            ? curr_px * (1.0 + spread / 2.0)
-            : curr_px * (1.0 - spread / 2.0);
+            ? std::max(curr_px * (1.0 + spread / 2.0), curr_px + 0.01)
+            : std::min(curr_px * (1.0 - spread / 2.0), curr_px - 0.01);
+        // ^ at least a cent through the mid, matching the market maker's one-cent quote floor
 
         auto risk_check = risk_mgr_->check_order(sig->get_symbol(), ord_side, ord_qty, ord_px);
         if (!risk_check.is_approved()) {

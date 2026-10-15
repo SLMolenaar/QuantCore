@@ -27,7 +27,7 @@ public:
         , num_levels_(num_levels)
         , base_depth_(base_depth)
         , next_order_id_(10000000000000ULL)
-        , rng_(std::random_device{}())
+        , rng_(42)  // fixed seed: backtests must be reproducible
         , order_allocator_(order_allocator)
     {
     }
@@ -108,6 +108,12 @@ private:
             price = std::max(0.01, price);
 
             Price    price_cents = static_cast<Price>(std::llround(price * 100.0));
+            // Keep quotes off the mid's cent: at tight spreads rounding would collapse
+            // bids and asks onto one price and they would trade against each other.
+            Price    mid_cents   = static_cast<Price>(std::llround(mid_price * 100.0));
+            price_cents = (side == Side::Buy) ? std::min(price_cents, mid_cents - 1)
+                                              : std::max(price_cents, mid_cents + 1);
+            if (price_cents < 1) continue;
             Quantity quantity    = calc_quantity(level, volume);
 
             if (quantity < 1e-8) {

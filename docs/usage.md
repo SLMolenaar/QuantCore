@@ -642,6 +642,8 @@ engine.configure_market_maker(
 )
 ```
 
+Prices are quoted in whole cents, so quotes always sit at least one cent either side of the mid regardless of `spread`, and strategy orders cross by at least a cent. Very small spreads therefore behave like a one-cent spread. The market maker's quantity jitter uses a fixed seed, so identical runs give identical results.
+
 ### create_backtest
 
 `create_backtest` returns a configured engine without running it:
