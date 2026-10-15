@@ -2,7 +2,7 @@
 
 #include <memory>
 #include <list>
-#include <format>
+#include <string>
 #include <stdexcept>
 #include "Types.h"
 #include "Ordertype.h"
@@ -39,8 +39,8 @@ public:
 
     void Fill(Quantity quantity) {
         if (quantity > remainingQuantity_ + 1e-8) {
-            throw std::logic_error(std::format("Order ({}) cannot be filled for more than its remaining quantity.",
-                                               GetOrderId()));
+            throw std::logic_error("Order (" + std::to_string(GetOrderId()) +
+                                   ") cannot be filled for more than its remaining quantity.");
         }
         remainingQuantity_ -= quantity;
         // Clamp to zero to avoid floating point drift below zero

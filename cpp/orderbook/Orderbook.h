@@ -92,7 +92,12 @@ private:
         auto nowTime      = std::chrono::system_clock::to_time_t(now);
         auto lastResetTime= std::chrono::system_clock::to_time_t(lastDayReset_);
 
-        std::tm nowTm = *std::localtime(&nowTime);
+        std::tm nowTm{};
+#ifdef _WIN32
+        localtime_s(&nowTm, &nowTime);
+#else
+        localtime_r(&nowTime, &nowTm);
+#endif
 
         std::tm todayResetTm    = nowTm;
         todayResetTm.tm_hour    = dayResetHour_.count();

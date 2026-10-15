@@ -16,6 +16,15 @@ from pathlib import Path
 import pybind11
 
 
+# Windows consoles default to a legacy code page that cannot print the check/cross
+# marks below; never let output encoding crash the build.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 class Colors:
     """ANSI color codes"""
     BLUE = '\033[94m'
