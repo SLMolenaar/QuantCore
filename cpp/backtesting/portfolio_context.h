@@ -39,6 +39,10 @@ public:
         }
     }
 
+    // "Cash" is uncommitted capital: equity minus the gross (absolute) value of
+    // all positions. Longs and shorts commit capital symmetrically, so this is
+    // buying power rather than a literal cash balance (short-sale proceeds are
+    // not added back). get_portfolio_value() = cash + gross value = equity.
     void set_cash(double cash) {
         cash_ = cash;
     }

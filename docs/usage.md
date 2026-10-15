@@ -1586,7 +1586,10 @@ Capital is shared across all positions. The position sizer and risk limits apply
 portfolio = engine.get_portfolio_context()
 
 portfolio.get_initial_capital()        # float, capital passed to BacktestEngine
-portfolio.get_cash()                   # float, uninvested cash
+portfolio.get_cash()                   # float, uncommitted capital = equity - gross exposure
+                                       # (long and short positions each commit |value|; short-sale
+                                       # proceeds are not added back, so this is buying power,
+                                       # not a literal cash balance)
 portfolio.get_portfolio_value()        # float, cash + mark-to-market value of all positions
 portfolio.get_total_position_value()   # float, gross market value of all open positions
 portfolio.get_leverage()               # float, total notional / portfolio value

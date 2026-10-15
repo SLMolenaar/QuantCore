@@ -239,3 +239,43 @@ class TestFillMode:
         from quantcore._engine_builder import build_engine
         eng = build_engine({"T": self._bars()}, 100_000.0, BacktestConfig(fill_mode="next_bar_open"))
         assert eng.get_fill_mode() == qc.FillMode.NEXT_BAR_OPEN
+
+
+class TestCashSymmetry:
+    """Long and short positions commit capital the same way (buying-power convention)."""
+
+    def _run(self, sig):
+        DAY = 86_400 * 1_000_000_000
+        bars = [qc.BarData("A", (i + 1) * DAY, 100, 101, 99, 100, 1e6) for i in range(6)]
+
+        class Once(qc.Strategy):
+            def __init__(self):
+                super().__init__("Once")
+                self.n = 0
+
+            def on_data(self, e):
+                if self.n == 0:
+                    self.generate_signal("A", sig, 1.0, e.timestamp_ns)
+                self.n += 1
+
+            def reset(self):
+                super().reset()
+                self.n = 0
+
+        eng = qc.BacktestEngine(100_000.0)
+        eng.add_data("A", bars)
+        eng.set_strategy(Once())
+        eng.run()
+        return eng, eng.get_portfolio_context()
+
+    def test_short_and_long_commit_capital_symmetrically(self):
+        le, lp = self._run(qc.SignalType.BUY)
+        se, sp = self._run(qc.SignalType.SELL)
+        assert se.get_execution_engine("A").get_position() == pytest.approx(
+            -le.get_execution_engine("A").get_position())
+        assert sp.get_cash() == pytest.approx(lp.get_cash())
+        assert sp.get_leverage() == pytest.approx(lp.get_leverage())
+
+    def test_portfolio_value_equals_equity_for_shorts(self):
+        eng, p = self._run(qc.SignalType.SELL)
+        assert p.get_portfolio_value() == pytest.approx(eng.get_equity_curve()[-1])
