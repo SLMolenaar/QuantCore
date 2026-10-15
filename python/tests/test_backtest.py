@@ -197,3 +197,45 @@ class TestHelperFunctions:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---------------------------------------------------------------------------
+# Fill mode
+# ---------------------------------------------------------------------------
+
+class TestFillMode:
+    DAY = 86_400 * 1_000_000_000
+
+    def _bars(self):
+        out = []
+        for i in range(10):
+            p = 100.0 if i == 0 else 110.0
+            out.append(qc.BarData("T", (i + 1) * self.DAY, p, p + 1, p - 1, p, 1e6))
+        return out
+
+    def _entry(self, fill_mode):
+        eng = qc.create_backtest(100_000.0, {"T": self._bars()}, qc.BuyAndHold(), fill_mode)
+        eng.run()
+        return eng.get_execution_engine("T").get_average_price()
+
+    def test_default_is_same_bar_close(self):
+        assert qc.BacktestEngine(1000.0).get_fill_mode() == qc.FillMode.SAME_BAR_CLOSE
+
+    def test_next_bar_open_fills_at_gap_open(self):
+        assert self._entry(None) == pytest.approx(100.0, abs=0.1)
+        assert self._entry("next_bar_open") == pytest.approx(110.0, abs=0.1)
+        assert self._entry(qc.FillMode.NEXT_BAR_OPEN) == pytest.approx(110.0, abs=0.1)
+
+    def test_run_backtest_accepts_fill_mode(self):
+        res = qc.run_backtest(qc.BuyAndHold(), {"T": self._bars()}, fill_mode="next_bar_open")
+        assert res.final_value > 0
+
+    def test_unknown_fill_mode_rejected(self):
+        with pytest.raises(ValueError):
+            qc.create_backtest(1000.0, fill_mode="whenever")
+
+    def test_backtest_config_fill_mode(self):
+        from quantcore.walk_forward import BacktestConfig
+        from quantcore._engine_builder import build_engine
+        eng = build_engine({"T": self._bars()}, 100_000.0, BacktestConfig(fill_mode="next_bar_open"))
+        assert eng.get_fill_mode() == qc.FillMode.NEXT_BAR_OPEN

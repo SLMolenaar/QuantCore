@@ -521,6 +521,21 @@ The numpy path for tick data uses a single boundary crossing instead of N indivi
 
 `add_data` and `add_tick_data` are mutually exclusive per symbol - calling one clears any previously registered data for that symbol.
 
+### Fill mode (when orders execute)
+
+By default (`same_bar_close`) a signal generated on a bar fills against liquidity quoted around **that same bar's close**. That is optimistic for bar data: the strategy acts on a close it only learns after the bar has ended.
+
+`next_bar_open` removes that look-ahead. The order is sent as a market order at the **next** bar's (or tick's) timestamp and fills around that bar's **open**. A signal on the last bar never fills.
+
+```python
+res    = qc.run_backtest(strategy, data, fill_mode='next_bar_open')
+engine = qc.create_backtest(100_000, data, strategy, fill_mode='next_bar_open')
+engine.set_fill_mode(qc.FillMode.NEXT_BAR_OPEN)          # direct engine use
+config = BacktestConfig(fill_mode='next_bar_open')       # optimisation / walk-forward
+```
+
+Use it for daily-bar strategies. On the bundled mean-reversion sample data the return drops from 11.3% to 7.5%. Notes: the default is unchanged so existing results reproduce; stop orders still execute against the triggering bar's book, which in this mode is centred on the open; and `get_total_pnl()` marks open positions to the book's mid (the last open), while `run()` and the equity curve use the last close.
+
 ### Market maker refresh interval
 
 The engine runs a synthetic market maker that refreshes its quotes on every event by default. For dense tick data this dominates cost. Throttle it:

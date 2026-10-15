@@ -29,6 +29,17 @@
 
 namespace quantcore {
 
+// When strategy orders execute relative to the data that produced the signal.
+enum class FillMode {
+    // Order fills against liquidity quoted around the same bar's close (plus
+    // latency). Optimistic for bar data: the strategy trades at a price it only
+    // knows after the bar ended. Default, kept for backward compatibility.
+    SameBarClose,
+    // Order is sent as a market order at the next bar's (or tick's) time and
+    // fills against liquidity quoted around that bar's open.
+    NextBarOpen
+};
+
 class BacktestEngine {
 public:
     explicit BacktestEngine(double initial_capital = 100000.0)
@@ -140,6 +151,10 @@ public:
         volatility_lookback_   = lookback;
     }
 
+    // See FillMode. Affects strategy orders and the market-maker mid price.
+    void set_fill_mode(FillMode mode) { fill_mode_ = mode; }
+    FillMode get_fill_mode() const { return fill_mode_; }
+
     void set_bars_per_year(size_t bars_per_year) {
         if (bars_per_year == 0)
             throw std::invalid_argument("Bars per year must be positive");
@@ -206,6 +221,19 @@ public:
             first_bar_timestamp_ = 0;
 
         load_data();
+
+        event_times_.clear();
+        if (fill_mode_ == FillMode::NextBarOpen) {
+            for (const auto& [symbol, bars] : data_) {
+                auto& v = event_times_[symbol];
+                for (const auto& b : bars) v.push_back(b.timestamp_ns);
+            }
+            for (const auto& [symbol, ticks] : tick_data_) {
+                auto& v = event_times_[symbol];
+                for (const auto& t : ticks) v.push_back(t.timestamp_ns);
+            }
+            for (auto& [symbol, v] : event_times_) std::sort(v.begin(), v.end());
+        }
 
         equity_.push_back(init_cap_);
         timestamps_.push_back(first_bar_timestamp_);
@@ -362,6 +390,18 @@ private:
 
     int64_t last_event_day_;
     int64_t trading_start_ns_ = std::numeric_limits<int64_t>::min();
+
+    FillMode fill_mode_ = FillMode::SameBarClose;
+    // Sorted event timestamps per symbol; only built for FillMode::NextBarOpen.
+    std::unordered_map<std::string, std::vector<int64_t>> event_times_;
+
+    // First data timestamp for `symbol` strictly after `ts`, or -1 if none.
+    int64_t next_event_time(const std::string& symbol, int64_t ts) const {
+        auto it = event_times_.find(symbol);
+        if (it == event_times_.end()) return -1;
+        auto nx = std::upper_bound(it->second.begin(), it->second.end(), ts);
+        return nx == it->second.end() ? -1 : *nx;
+    }
 
     static constexpr size_t  PRICE_HISTORY_BUFFER = 10;
     static constexpr double  MIN_ORDER_QTY        = 1e-8;
@@ -730,7 +770,15 @@ private:
             if (mm_it != mms_.end() && should_refresh_mm(symbol, md->get_timestamp())) {
                 // A refreshed quote may cross our resting orders; those trades
                 // must reach the position/fill bookkeeping.
-                auto trades = mm_it->second->update_quotes(*ee_it->second, *md);
+                // In next-bar-open mode the book is centred on the open, which is
+                // the price orders sent at this bar's time can actually get.
+                MarketDataEvent open_quote(symbol, md->get_timestamp(),
+                                           md->get_open(), md->get_open(),
+                                           md->get_open(), md->get_open(),
+                                           md->get_volume());
+                const MarketDataEvent& quote_ev =
+                    (fill_mode_ == FillMode::NextBarOpen) ? open_quote : *md;
+                auto trades = mm_it->second->update_quotes(*ee_it->second, quote_ev);
                 if (!trades.empty()) {
                     auto fills = ee_it->second->apply_trades(trades, false);
                     for (const auto& f : fills)
@@ -843,11 +891,22 @@ private:
             return;
         }
 
-        int64_t latency = ee_it->second->get_latency_ns();
+        int64_t   latency  = ee_it->second->get_latency_ns();
+        int64_t   exec_ts  = sig->get_timestamp() + latency;
+        OrderType ord_type = OrderType::GoodTillCancel;
+        if (fill_mode_ == FillMode::NextBarOpen) {
+            // Decision made on this bar's data: send a market order at the next
+            // bar. No next bar (last bar of the data) means it can never fill.
+            int64_t next_ts = next_event_time(sig->get_symbol(), sig->get_timestamp());
+            if (next_ts < 0) return;
+            exec_ts  = next_ts + latency;
+            ord_type = OrderType::Market;
+            ord_px   = 0.0;
+        }
         auto ord = make_event<OrderEvent>(
             sig->get_symbol(),
-            sig->get_timestamp() + latency,
-            ord_side, OrderType::GoodTillCancel,
+            exec_ts,
+            ord_side, ord_type,
             ord_qty, ord_px
         );
         ord->set_order_id(next_oid_++);

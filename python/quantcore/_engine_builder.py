@@ -13,6 +13,19 @@ if TYPE_CHECKING:
     from quantcore.walk_forward import BacktestConfig
 
 
+def parse_fill_mode(mode):
+    """Accept a FillMode or 'same_bar_close' / 'next_bar_open'."""
+    import quantcore as qc
+    if isinstance(mode, qc.FillMode):
+        return mode
+    table = {'same_bar_close': qc.FillMode.SAME_BAR_CLOSE,
+             'next_bar_open':  qc.FillMode.NEXT_BAR_OPEN}
+    try:
+        return table[str(mode).lower()]
+    except KeyError:
+        raise ValueError(f"Unknown fill_mode '{mode}'. Valid values: {list(table)}") from None
+
+
 def build_engine(data: Dict[str, list], capital: float, config: "BacktestConfig"):
     """
     Construct and configure a BacktestEngine from a BacktestConfig.
@@ -48,6 +61,7 @@ def build_engine(data: Dict[str, list], capital: float, config: "BacktestConfig"
         )
     engine.set_position_sizer(cls(*config.sizer_args))
     engine.set_bars_per_year(config.bars_per_year)
+    engine.set_fill_mode(parse_fill_mode(config.fill_mode))
 
     limits = qc.RiskLimits()
     limits.max_position_pct = config.max_position_pct

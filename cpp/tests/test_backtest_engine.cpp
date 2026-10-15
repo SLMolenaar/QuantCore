@@ -751,3 +751,37 @@ TEST(BacktestEngineRegression, TradingStartSuppressesEarlySignals) {
     EXPECT_GT(run(0), 0.0);
     EXPECT_DOUBLE_EQ(run(5 * 86'400'000'000'000LL), 0.0);
 }
+
+namespace {
+// Bar 0 closes at 100; every later bar gaps up and trades around 110.
+quantcore::BarSeries gap_bars(int n) {
+    quantcore::BarSeries bars;
+    for (int i = 0; i < n; ++i) {
+        double p = (i == 0) ? 100.0 : 110.0;
+        bars.push_back(quantcore::BarData("T", (int64_t)(i + 1) * 86'400'000'000'000LL,
+                                          p, p + 1, p - 1, p, 1e6));
+    }
+    return bars;
+}
+double entry_price(quantcore::FillMode mode, int n_bars) {
+    quantcore::BacktestEngine eng(100000.0);
+    eng.set_fill_mode(mode);
+    eng.add_data("T", gap_bars(n_bars));
+    eng.set_strategy(std::make_shared<quantcore::BuyAndHold>());   // signals on bar 0
+    eng.run();
+    return eng.get_execution_engine("T")->get_average_price();
+}
+}
+
+TEST(FillModeRegression, SameBarCloseFillsAtSignalBarClose) {
+    EXPECT_NEAR(entry_price(quantcore::FillMode::SameBarClose, 5), 100.0, 0.1);
+}
+
+TEST(FillModeRegression, NextBarOpenFillsAtNextBarOpen) {
+    EXPECT_NEAR(entry_price(quantcore::FillMode::NextBarOpen, 5), 110.0, 0.1);
+}
+
+TEST(FillModeRegression, NextBarOpenDropsSignalOnLastBar) {
+    // The only bar generates the signal; there is no next bar to fill on.
+    EXPECT_DOUBLE_EQ(entry_price(quantcore::FillMode::NextBarOpen, 1), 0.0);
+}

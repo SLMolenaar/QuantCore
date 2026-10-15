@@ -49,6 +49,7 @@ class BacktestConfig:
                     'EqualWeight', 'VolatilityTargeting', 'FixedShares'
     sizer_args    : positional args for the sizer constructor
     bars_per_year : annualisation factor (252 daily, 8760 hourly crypto, etc.)
+    fill_mode     : 'same_bar_close' (default) or 'next_bar_open'; see FillMode
     """
     sizer_type:       str   = 'FixedPercentage'
     sizer_args:       tuple = (0.10,)
@@ -62,6 +63,7 @@ class BacktestConfig:
     max_loss_pct:     float = 0.50
     max_order_value:  float = 0.0
     risk_enabled:     bool  = True
+    fill_mode:        str   = 'same_bar_close'   # or 'next_bar_open'
 
 
 def _ppy(config):

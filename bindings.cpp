@@ -66,6 +66,10 @@ PYBIND11_MODULE(_core, m) {
         .value("SELL", Side::Sell)
         .export_values();
 
+    py::enum_<FillMode>(m, "FillMode")
+        .value("SAME_BAR_CLOSE", FillMode::SameBarClose)
+        .value("NEXT_BAR_OPEN",  FillMode::NextBarOpen);
+
     py::enum_<OrderType>(m, "OrderType")
         .value("GOOD_TILL_CANCEL",     OrderType::GoodTillCancel)
         .value("IMMEDIATE_OR_CANCEL",  OrderType::ImmediateOrCancel)
@@ -480,6 +484,8 @@ Use generate_stop() when guaranteed execution matters more than price.
         .def("get_portfolio_context",  &BacktestEngine::get_portfolio_context)
         .def("set_bars_per_year",      &BacktestEngine::set_bars_per_year,    py::arg("bars_per_year"))
         .def("get_bars_per_year",      &BacktestEngine::get_bars_per_year)
+        .def("set_fill_mode",          &BacktestEngine::set_fill_mode, py::arg("mode"))
+        .def("get_fill_mode",          &BacktestEngine::get_fill_mode)
         .def("set_trading_start",      &BacktestEngine::set_trading_start,
              py::arg("timestamp_ns"))
         .def("get_trading_start",      &BacktestEngine::get_trading_start)

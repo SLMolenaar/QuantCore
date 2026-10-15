@@ -21,6 +21,7 @@ except ImportError as e:
 SignalType = _core.SignalType
 Side       = _core.Side
 OrderType  = _core.OrderType
+FillMode   = _core.FillMode
 
 BarData       = _core.BarData
 CSVDataLoader = _core.CSVDataLoader
@@ -203,6 +204,7 @@ def create_backtest(
         initial_capital: float = 100000.0,
         data: Optional[Dict[str, List[BarData]]] = None,
         strategy: Optional[Strategy] = None,
+        fill_mode=None,
 ) -> BacktestEngine:
     """
     Convenience constructor for a BacktestEngine.
@@ -214,6 +216,9 @@ def create_backtest(
         >>> final  = engine.run()
     """
     engine = BacktestEngine(initial_capital)
+    if fill_mode is not None:
+        from ._engine_builder import parse_fill_mode
+        engine.set_fill_mode(parse_fill_mode(fill_mode))
     if data:
         for symbol, bars in data.items():
             engine.add_data(symbol, bars)
@@ -229,6 +234,7 @@ def run_backtest(
         calendar: Optional[str] = None,
         benchmark: Optional[Dict[str, List[BarData]]] = None,
         benchmark_strategy: Optional[Strategy] = None,
+        fill_mode=None,
 ) -> "BacktestResults":
     """
     Run a complete backtest and return a BacktestResults object.
@@ -254,19 +260,25 @@ def run_backtest(
         benchmark_strategy: Strategy used for the benchmark backtest. Defaults to
                             BuyAndHold() when benchmark data is given but no
                             strategy is specified.
+        fill_mode:          'same_bar_close' (engine default) or 'next_bar_open'
+                            (or a FillMode). Use next_bar_open for bar data: it
+                            sends orders at the next bar and fills them around
+                            that bar's open, so a strategy cannot trade at a
+                            close it only learns after the bar ends. Also applied
+                            to the benchmark run.
     """
     if calendar:
         cal  = TradingCalendar(calendar)
         data = {sym: cal.filter_bars(bars) for sym, bars in data.items()}
 
-    engine      = create_backtest(initial_capital, data, strategy)
+    engine      = create_backtest(initial_capital, data, strategy, fill_mode)
     final_value = engine.run()
 
     benchmark_equity_curve = None
     if benchmark is not None or benchmark_strategy is not None:
         bm_data     = benchmark if benchmark is not None else data
         bm_strategy = benchmark_strategy if benchmark_strategy is not None else BuyAndHold()
-        bm_engine   = create_backtest(initial_capital, bm_data, bm_strategy)
+        bm_engine   = create_backtest(initial_capital, bm_data, bm_strategy, fill_mode)
         bm_engine.run()
         benchmark_equity_curve = bm_engine.get_equity_curve()
 
@@ -448,7 +460,7 @@ class BacktestResults:
 __version__ = version()
 __all__ = [
     # Enums
-    'SignalType', 'Side', 'OrderType',
+    'SignalType', 'Side', 'OrderType', 'FillMode',
     # Bar data
     'BarData', 'CSVDataLoader', 'load_csv_data',
     # Tick data
