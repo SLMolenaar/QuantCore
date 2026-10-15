@@ -1746,6 +1746,7 @@ wfa = WalkForwardAnalyzer(
   test_size=63,            # bars in each out-of-sample window (also the step size)
   metric='sharpe_ratio',
   n_jobs=1,
+  warmup_bars=200,         # prime long-lookback indicators before each test window
 )
 
 result = wfa.analyze(data, initial_capital=100_000.0, verbose=True)
@@ -1760,7 +1761,8 @@ result.out_of_sample_results    # List[dict], OOS metrics per window
 result.best_params_per_window   # List[dict], winning params per window
 result.combined_equity_curve    # np.ndarray, chained OOS equity curve across all windows
 result.combined_trade_pnls      # List[float], all OOS trade PnLs concatenated in window order
-result.overall_metrics          # dict: sharpe_ratio, total_return, max_drawdown, num_windows
+result.overall_metrics          # dict: sharpe_ratio, total_return, max_drawdown (from the combined OOS curve),
+                               #       mean_window_* (per-window averages), num_windows
 ```
 
 OOS metrics in `out_of_sample_results` use **decimal format** for `total_return` and `max_drawdown`, consistent with `OptimizationResult`.

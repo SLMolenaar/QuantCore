@@ -171,6 +171,59 @@ def _build_windows(data, train_size, test_size):
     return windows
 
 
+def _add_warmup(windows, warmup_bars):
+    """
+    Turn (train, test) pairs into (train, test_with_warmup, test_start_ns).
+
+    The last `warmup_bars` bars of each training slice (per symbol) are
+    prepended to the test slice so long-lookback indicators are primed when
+    the out-of-sample period begins. test_start_ns is the first real test
+    timestamp; nothing is traded or scored before it.
+    """
+    out = []
+    for train, test in windows:
+        test_start_ns = min(v[0].timestamp_ns for v in test.values())
+        warmed = {
+            sym: (train[sym][-warmup_bars:] if warmup_bars > 0 else []) + test[sym]
+            for sym in test
+        }
+        out.append((train, warmed, test_start_ns))
+    return out
+
+
+def _run_oos_backtest(strategy, data, capital, config, test_start_ns):
+    """Run a (possibly warmed-up) out-of-sample backtest and score only the test period."""
+    import numpy as np
+    import quantcore as qc
+    from quantcore._engine_builder import build_engine
+
+    if test_start_ns is None:
+        if config is not None:
+            return _run_configured_backtest(strategy, data, capital, config)
+        return qc.run_backtest(strategy, data, capital)
+
+    engine = build_engine(data, capital, config if config is not None else BacktestConfig())
+    engine.set_strategy(strategy)
+    engine.set_trading_start(test_start_ns)
+    final_value = engine.run()
+
+    ts = np.array(engine.get_timestamps(), dtype=np.int64)
+    ec = np.array(engine.get_equity_curve())
+    keep = ts >= test_start_ns
+    ec, ts = ec[keep], ts[keep]
+    return qc.BacktestResults({
+        'strategy':        strategy.get_name(),
+        'initial_capital': capital,
+        'final_value':     final_value,
+        'total_pnl':       engine.get_total_pnl(),
+        'total_fees':      engine.get_total_fees(),
+        'return_pct':      (final_value / capital - 1.0) * 100.0,
+        'equity_curve':    ec.tolist(),
+        'timestamps':      ts.tolist(),
+        'trade_pnls':      engine.get_trade_pnls(),
+    })
+
+
 # ============================================================================
 # MODULE-LEVEL WORKER FUNCTIONS
 # Must be top-level for ProcessPoolExecutor pickling.
@@ -221,7 +274,7 @@ def _backtest_worker(args: tuple) -> Optional[dict]:
 
 def _window_worker(args: tuple) -> Optional[dict]:
     strategy_factory, param_grid_dict, train_raw, test_raw, \
-        initial_capital, metric, config = args
+        initial_capital, metric, config, test_start_ns = args
 
     try:
         import numpy as np
@@ -258,12 +311,9 @@ def _window_worker(args: tuple) -> Optional[dict]:
         best_params = best_result['params']
         strategy    = strategy_factory(**best_params)
 
-        if config is not None:
-            oos_results = _run_configured_backtest(
-                strategy, test_data, initial_capital, config
-            )
-        else:
-            oos_results = qc.run_backtest(strategy, test_data, initial_capital)
+        oos_results = _run_oos_backtest(
+            strategy, test_data, initial_capital, config, test_start_ns
+        )
 
         equity_curve = np.array(oos_results.equity_curve)
         if len(equity_curve) > 0:
@@ -495,8 +545,15 @@ class WalkForwardAnalyzer:
 
     The OOS equity curves are chained into combined_equity_curve, with each
     segment rescaled to start from the previous segment's final value.
-    Trade PnLs are concatenated into combined_trade_pnls for use with
-    calculate_all_metrics on the combined curve.
+    Trade PnLs are concatenated into combined_trade_pnls. overall_metrics are
+    computed from the combined curve (per-window averages are available as
+    mean_window_*).
+
+    warmup_bars: number of bars from the end of each training window that are
+    replayed before the test window so long-lookback indicators are primed
+    (no trades are placed and nothing is scored during warm-up). Use at least
+    the strategy's longest lookback, e.g. warmup_bars >= 200 for SMA 50/200.
+    The default 0 starts every test window cold. Clamped to train_size.
     """
 
     def __init__(
@@ -508,7 +565,11 @@ class WalkForwardAnalyzer:
             metric:           str                      = 'sharpe_ratio',
             n_jobs:           int                      = 1,
             backtest_config:  Optional[BacktestConfig] = None,
+            warmup_bars:      int                      = 0,
     ):
+        if warmup_bars < 0:
+            raise ValueError("warmup_bars must be >= 0")
+        self.warmup_bars      = warmup_bars
         self.strategy_factory = strategy_factory
         self.param_grid       = param_grid
         self.train_size       = train_size
@@ -540,11 +601,16 @@ class WalkForwardAnalyzer:
                 "Check that all symbols have sufficient overlapping data."
             )
 
+        if self.warmup_bars > 0:
+            windows = _add_warmup(windows, min(self.warmup_bars, self.train_size))
+        else:
+            windows = [(tr, te, None) for tr, te in windows]
+
         tasks = [
             (self.strategy_factory, self.param_grid,
              _serialize_data(train_slice), _serialize_data(test_slice),
-             initial_capital, self.metric, self.backtest_config)
-            for train_slice, test_slice in windows
+             initial_capital, self.metric, self.backtest_config, test_start_ns)
+            for train_slice, test_slice, test_start_ns in windows
         ]
 
         use_parallel = self.n_jobs != 1 and len(tasks) >= MIN_PARALLEL_TASKS
@@ -603,12 +669,28 @@ class WalkForwardAnalyzer:
         else:
             combined_equity_curve = np.array([])
 
+        # Overall metrics come from the chained out-of-sample equity curve; the
+        # per-window averages are kept as mean_window_*.
+        from quantcore.analytics import calculate_all_metrics
         overall_metrics = {
-            'sharpe_ratio': float(np.mean([r['sharpe_ratio'] for r in out_of_sample_results])),
-            'total_return': float(np.mean([r['total_return'] for r in out_of_sample_results])),
-            'max_drawdown': float(np.mean([r['max_drawdown'] for r in out_of_sample_results])),
-            'num_windows':  len(out_of_sample_results),
+            'mean_window_sharpe_ratio': float(np.mean([r['sharpe_ratio'] for r in out_of_sample_results])),
+            'mean_window_total_return': float(np.mean([r['total_return'] for r in out_of_sample_results])),
+            'mean_window_max_drawdown': float(np.mean([r['max_drawdown'] for r in out_of_sample_results])),
+            'num_windows':              len(out_of_sample_results),
         }
+        if len(combined_equity_curve) >= 2:
+            m = calculate_all_metrics(
+                combined_equity_curve,
+                trade_pnls=all_trade_pnls if all_trade_pnls else None,
+                periods_per_year=_ppy(self.backtest_config),
+            )
+            overall_metrics.update(
+                sharpe_ratio=float(m.sharpe_ratio),
+                total_return=m.total_return / 100.0,
+                max_drawdown=m.max_drawdown / 100.0,
+            )
+        else:
+            overall_metrics.update(sharpe_ratio=0.0, total_return=0.0, max_drawdown=0.0)
 
         return WalkForwardResult(
             in_sample_results=in_sample_results,

@@ -500,3 +500,48 @@ class TestGridSearchOptimizerMultiAsset:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---------------------------------------------------------------------------
+# Warm-up and combined overall metrics
+# ---------------------------------------------------------------------------
+
+class TestWarmupAndOverall:
+    def _data(self, n=300):
+        return {"A": make_bars(n)}
+
+    def test_overall_metrics_from_combined_curve(self):
+        import quantcore as qc
+        wfa = WalkForwardAnalyzer(qc.SMACrossover, {"fast_period": [3], "slow_period": [8]},
+                                  train_size=60, test_size=30)
+        res = wfa.analyze(self._data(), verbose=False)
+        m = res.overall_metrics
+        for k in ("sharpe_ratio", "total_return", "max_drawdown",
+                  "mean_window_sharpe_ratio", "mean_window_total_return", "num_windows"):
+            assert k in m
+        c = res.combined_equity_curve
+        assert m["total_return"] == pytest.approx(c[-1] / c[0] - 1.0)
+
+    def test_warmup_lets_long_lookback_trade(self):
+        import math
+        import quantcore as qc
+        bars = []
+        for i in range(400):
+            p = 100.0 + 10.0 * math.sin(i / 8.0)
+            bars.append(qc.BarData("A", i * DAY, p, p + 1.0, p - 1.0, p, 1_000_000.0))
+        kw = dict(strategy_factory=qc.SMACrossover,
+                  param_grid={"fast_period": [5], "slow_period": [40]},
+                  train_size=100, test_size=30)
+        cold = WalkForwardAnalyzer(**kw).analyze({"A": bars}, verbose=False)
+        warm = WalkForwardAnalyzer(warmup_bars=40, **kw).analyze({"A": bars}, verbose=False)
+        # a cold 30-bar window can never fill a 40-bar SMA
+        assert sum(o["num_trades"] for o in cold.out_of_sample_results) == 0
+        assert sum(o["num_trades"] for o in warm.out_of_sample_results) > 0
+        # warm-up bars are not scored: exactly one equity point per test bar
+        assert len(warm.combined_equity_curve) == 30 * len(warm.out_of_sample_results)
+
+    def test_negative_warmup_rejected(self):
+        import quantcore as qc
+        with pytest.raises(ValueError):
+            WalkForwardAnalyzer(qc.SMACrossover, {"fast_period": [3], "slow_period": [8]},
+                                warmup_bars=-1)

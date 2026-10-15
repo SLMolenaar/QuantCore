@@ -25,6 +25,7 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <limits>
 
 namespace quantcore {
 
@@ -145,6 +146,11 @@ public:
         bars_per_year_ = bars_per_year;
     }
     size_t get_bars_per_year() const { return bars_per_year_; }
+
+    // Signals stamped before this time are ignored (strategies still see data,
+    // so indicators warm up without trading). Persists across run() calls.
+    void set_trading_start(int64_t timestamp_ns) { trading_start_ns_ = timestamp_ns; }
+    int64_t get_trading_start() const { return trading_start_ns_; }
 
     double run() {
         if (!strat_)
@@ -355,6 +361,7 @@ private:
     uint64_t next_stop_id_ = 1;
 
     int64_t last_event_day_;
+    int64_t trading_start_ns_ = std::numeric_limits<int64_t>::min();
 
     static constexpr size_t  PRICE_HISTORY_BUFFER = 10;
     static constexpr double  MIN_ORDER_QTY        = 1e-8;
@@ -768,6 +775,7 @@ private:
         auto sig = std::static_pointer_cast<SignalEvent>(event);
 
         if (sig->get_signal_type() == SignalType::HOLD) return;
+        if (sig->get_timestamp() < trading_start_ns_) return;   // warm-up period
 
         auto px_it = last_px_.find(sig->get_symbol());
         if (px_it == last_px_.end()) return;

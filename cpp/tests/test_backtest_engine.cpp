@@ -734,3 +734,20 @@ TEST(BacktestEngineRegression, StopWithNoPositionDoesNotOpenShort) {
     eng.run();
     EXPECT_DOUBLE_EQ(eng.get_execution_engine("T")->get_position(), 0.0);
 }
+
+TEST(BacktestEngineRegression, TradingStartSuppressesEarlySignals) {
+    auto run = [](int64_t start) {
+        quantcore::BacktestEngine eng(100000.0);
+        quantcore::BarSeries bars;
+        for (int i = 0; i < 10; ++i)
+            bars.push_back(quantcore::BarData("T", (int64_t)(i + 1) * 86'400'000'000'000LL,
+                                              100, 101, 99, 100, 1e6));
+        eng.add_data("T", bars);
+        eng.set_strategy(std::make_shared<quantcore::BuyAndHold>());   // signals on bar 1
+        eng.set_trading_start(start);
+        eng.run();
+        return eng.get_execution_engine("T")->get_position();
+    };
+    EXPECT_GT(run(0), 0.0);
+    EXPECT_DOUBLE_EQ(run(5 * 86'400'000'000'000LL), 0.0);
+}
