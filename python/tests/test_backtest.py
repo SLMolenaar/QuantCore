@@ -240,6 +240,29 @@ class TestFillMode:
         eng = build_engine({"T": self._bars()}, 100_000.0, BacktestConfig(fill_mode="next_bar_open"))
         assert eng.get_fill_mode() == qc.FillMode.NEXT_BAR_OPEN
 
+    def test_has_position_reflects_pending_order(self):
+        # Buy on bar 1, sell on bar 3 gated only on has_position(): no duplicate
+        # signals, so the run ends flat instead of opening an unintended short.
+        seen = []
+
+        class Gated(qc.Strategy):
+            def __init__(self):
+                super().__init__("Gated")
+                self.n = 0
+
+            def on_data(self, e):
+                self.n += 1
+                seen.append(self.has_position("T"))
+                if self.n in (1, 2) and not self.has_position("T"):
+                    self.generate_signal("T", qc.SignalType.BUY, 1.0, e.timestamp_ns)
+                elif self.n in (4, 5) and self.has_position("T"):
+                    self.generate_signal("T", qc.SignalType.SELL, 1.0, e.timestamp_ns)
+
+        eng = qc.create_backtest(100_000.0, {"T": self._bars()}, Gated(), "next_bar_open")
+        eng.run()
+        assert seen[1] is True          # pending BUY already visible on the next bar
+        assert eng.get_execution_engine("T").get_position() == 0.0
+
 
 class TestCashSymmetry:
     """Long and short positions commit capital the same way (buying-power convention)."""

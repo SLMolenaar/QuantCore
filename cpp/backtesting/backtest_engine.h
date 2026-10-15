@@ -856,7 +856,7 @@ private:
         // Cancel any stale unfilled strategy orders for this symbol before
         // placing a new one (wash trade prevention).
         cancel_stale_strategy_orders(sig->get_symbol(), *ee_it->second);
-
+        strat_->set_position(sig->get_symbol(), curr_pos);   // drop intended-position of cancelled orders
 
         double portfolio_vol = calculate_volatility(sig->get_symbol());
         double available_cash = std::max(0.0, portfolio_->get_cash() - pending_buy_notional());
@@ -928,6 +928,11 @@ private:
             pending_buys_[ord->get_order_id()] = {curr_px, ord_qty};
 
         track_strategy_order(sig->get_symbol(), ord->get_order_id(), ord_qty);
+        // Next-bar fills are still pending on the next on_data(): show the strategy
+        // the intended position so has_position()/get_position() don't lag.
+        if (fill_mode_ == FillMode::NextBarOpen)
+            strat_->set_position(sig->get_symbol(),
+                                 curr_pos + (ord_side == Side::Buy ? ord_qty : -ord_qty));
         eq_.push(ord);
     }
 
@@ -984,6 +989,8 @@ private:
         const double slippage_pct = engine->get_slippage_pct();
         auto trades = engine->execute_order(order);
         const bool is_taker = engine->last_order_was_taker();
+        if (fill_mode_ == FillMode::NextBarOpen)   // unfilled remainder: back to the real position
+            strat_->set_position(ord->get_symbol(), engine->get_position());
 
         for (const auto& trade : trades) {
             const TradeInfo& our_trade = (ord->get_side() == Side::Buy)
