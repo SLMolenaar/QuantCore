@@ -385,6 +385,15 @@ self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.get_timestamp())
 self.generate_signal(sym, qc.SignalType.BUY, 0.5, event.get_timestamp())
 ```
 
+### What a signal does to an existing position
+
+| Signal | Flat | Long | Short |
+|--------|------|------|-------|
+| `BUY`  | opens a long (sized by the position sizer) | **ignored** | covers the short (flat) |
+| `SELL` | opens a short | closes the long (flat) | **ignored** |
+
+Signals open, close or reverse-to-flat; they never add to or trim an open position. A `BUY` while already long (or `SELL` while short) is a no-op and leaves any pending orders for that symbol untouched. To go from long to short, send `SELL` (closes), then `SELL` again once flat.
+
 ---
 
 ## 3. Running a Backtest
@@ -1590,6 +1599,8 @@ portfolio.get_cash()                   # float, uncommitted capital = equity - g
                                        # (long and short positions each commit |value|; short-sale
                                        # proceeds are not added back, so this is buying power,
                                        # not a literal cash balance)
+portfolio.get_cash_balance()           # float, literal cash = equity - signed position value
+                                       # (a short sale adds its proceeds; a long spends them)
 portfolio.get_portfolio_value()        # float, cash + mark-to-market value of all positions
 portfolio.get_total_position_value()   # float, gross market value of all open positions
 portfolio.get_leverage()               # float, total notional / portfolio value

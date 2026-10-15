@@ -279,3 +279,18 @@ class TestCashSymmetry:
     def test_portfolio_value_equals_equity_for_shorts(self):
         eng, p = self._run(qc.SignalType.SELL)
         assert p.get_portfolio_value() == pytest.approx(eng.get_equity_curve()[-1])
+
+
+class TestCashBalance:
+    def test_cash_balance_includes_short_proceeds(self):
+        t = TestCashSymmetry()
+        le, lp = t._run(qc.SignalType.BUY)
+        se, sp = t._run(qc.SignalType.SELL)
+        equity = se.get_equity_curve()[-1]
+        # long: cash spent; short: proceeds received (position value ~10k at 100 x 100)
+        assert lp.get_cash_balance() == pytest.approx(lp.get_cash())
+        assert sp.get_cash_balance() == pytest.approx(equity + 10_000.0, abs=1.0)
+        assert sp.get_cash_balance() > sp.get_cash()
+
+    def test_cash_balance_starts_at_initial_capital(self):
+        assert qc.PortfolioContext(50_000.0).get_cash_balance() == 50_000.0

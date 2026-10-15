@@ -25,6 +25,7 @@ public:
     PortfolioContext(double initial_capital)
         : initial_capital_(initial_capital)
         , cash_(initial_capital)
+        , cash_balance_(initial_capital)
     {}
 
     void update_price(const std::string& symbol, double price) {
@@ -50,6 +51,11 @@ public:
     double get_cash() const {
         return cash_;
     }
+
+    // Literal cash balance: equity minus the *signed* market value of positions.
+    // Unlike get_cash(), short-sale proceeds are included (a 10k short adds ~10k).
+    void set_cash_balance(double balance) { cash_balance_ = balance; }
+    double get_cash_balance() const { return cash_balance_; }
 
     double get_initial_capital() const {
         return initial_capital_;
@@ -113,6 +119,7 @@ public:
 private:
     double initial_capital_;
     double cash_;
+    double cash_balance_;
     std::map<std::string, double> positions_;
     std::map<std::string, double> current_prices_;
 };

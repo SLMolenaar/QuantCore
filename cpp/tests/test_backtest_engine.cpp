@@ -785,3 +785,43 @@ TEST(FillModeRegression, NextBarOpenDropsSignalOnLastBar) {
     // The only bar generates the signal; there is no next bar to fill on.
     EXPECT_DOUBLE_EQ(entry_price(quantcore::FillMode::NextBarOpen, 1), 0.0);
 }
+
+namespace {
+// Emits one signal per bar for `count` bars, all of the same type.
+class RepeatSignal : public quantcore::Strategy {
+public:
+    RepeatSignal(quantcore::SignalType t, int count) : Strategy("Repeat"), t_(t), count_(count) {}
+    void on_data(const quantcore::MarketDataEvent& e) override {
+        if (n_++ < count_) generate_signal(e.get_symbol(), t_, 1.0, e.get_timestamp());
+    }
+    void reset() override { Strategy::reset(); n_ = 0; }
+    quantcore::SignalType t_; int count_; int n_ = 0;
+};
+quantcore::BarSeries flat_bars(int n, double p = 100.0) {
+    quantcore::BarSeries b;
+    for (int i = 0; i < n; ++i)
+        b.push_back(quantcore::BarData("T", (int64_t)(i + 1) * 86'400'000'000'000LL, p, p + 1, p - 1, p, 1e6));
+    return b;
+}
+double final_position(quantcore::SignalType t, int count) {
+    quantcore::BacktestEngine eng(100000.0);
+    eng.add_data("T", flat_bars(12));
+    eng.set_strategy(std::make_shared<RepeatSignal>(t, count));
+    eng.run();
+    return eng.get_execution_engine("T")->get_position();
+}
+}
+
+TEST(SignalSemanticsRegression, RepeatedBuyWhileLongDoesNotTrim) {
+    double once  = final_position(quantcore::SignalType::BUY, 1);
+    double often = final_position(quantcore::SignalType::BUY, 8);
+    EXPECT_GT(once, 0.0);
+    EXPECT_DOUBLE_EQ(often, once);
+}
+
+TEST(SignalSemanticsRegression, RepeatedSellWhileShortDoesNotTrim) {
+    double once  = final_position(quantcore::SignalType::SELL, 1);
+    double often = final_position(quantcore::SignalType::SELL, 8);
+    EXPECT_LT(once, 0.0);
+    EXPECT_DOUBLE_EQ(often, once);
+}

@@ -614,14 +614,18 @@ private:
         }
         curr_cap_ = total_equity;
 
-        double total_position_value = 0.0;
+        double total_position_value  = 0.0;   // gross (absolute)
+        double signed_position_value = 0.0;   // longs positive, shorts negative
         for (const auto& [symbol, engine] : engines_) {
             double pos = engine->get_position();
             auto px_it = last_px_.find(symbol);
-            if (px_it != last_px_.end() && pos != 0.0)
-                total_position_value += std::abs(pos * px_it->second);
+            if (px_it != last_px_.end() && pos != 0.0) {
+                total_position_value  += std::abs(pos * px_it->second);
+                signed_position_value += pos * px_it->second;
+            }
         }
         portfolio_->set_cash(curr_cap_ - total_position_value);
+        portfolio_->set_cash_balance(curr_cap_ - signed_position_value);
     }
 
     void maybe_snapshot_equity(int64_t timestamp) {
@@ -841,11 +845,19 @@ private:
         auto ee_it = engines_.find(sig->get_symbol());
         if (ee_it == engines_.end()) return;
 
+        // A signal in the direction of the current position is a no-op: signals
+        // open or reverse/close positions, they never add to or trim one. Checked
+        // before cancelling so pending orders for this symbol are left alone.
+        double curr_pos = ee_it->second->get_position();
+        if ((sig->get_signal_type() == SignalType::BUY  && curr_pos >  MIN_ORDER_QTY) ||
+            (sig->get_signal_type() == SignalType::SELL && curr_pos < -MIN_ORDER_QTY))
+            return;
+
         // Cancel any stale unfilled strategy orders for this symbol before
         // placing a new one (wash trade prevention).
         cancel_stale_strategy_orders(sig->get_symbol(), *ee_it->second);
 
-        double curr_pos      = ee_it->second->get_position();
+
         double portfolio_vol = calculate_volatility(sig->get_symbol());
         double available_cash = std::max(0.0, portfolio_->get_cash() - pending_buy_notional());
 

@@ -599,6 +599,7 @@ Use generate_stop() when guaranteed execution matters more than price.
     py::class_<PortfolioContext, std::shared_ptr<PortfolioContext>>(m, "PortfolioContext")
         .def(py::init<double>(), py::arg("initial_capital"))
         .def("get_cash",                  &PortfolioContext::get_cash)
+        .def("get_cash_balance",          &PortfolioContext::get_cash_balance)
         .def("get_initial_capital",       &PortfolioContext::get_initial_capital)
         .def("get_position",              &PortfolioContext::get_position,        py::arg("symbol"))
         .def("get_price",                 &PortfolioContext::get_price,           py::arg("symbol"))
