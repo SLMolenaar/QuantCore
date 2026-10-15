@@ -28,31 +28,29 @@ def _ohlc(seed=7):
     return open_, high, low, close
 
 
-def _run_qc(o, h, l, c):
+def _run_qc(o, h, l, c, short=False):
     bars = [qc.BarData("A", (i + 1) * DAY, o[i], h[i], l[i], c[i], 1e6) for i in range(N)]
 
     class Cross(qc.Strategy):
         def __init__(self):
             super().__init__("Cross")
             self.closes = []
-            self.long = False  # own state: has_position() lags a pending next-bar fill
 
         def on_data(self, e):
             self.closes.append(e.close)
             if len(self.closes) < SLOW:
                 return
             fast, slow = np.mean(self.closes[-FAST:]), np.mean(self.closes[-SLOW:])
-            if fast > slow and not self.long:
-                self.long = True
-                self.generate_signal("A", qc.SignalType.BUY, 1.0, e.timestamp_ns)
-            elif fast < slow and self.long:
-                self.long = False
-                self.generate_signal("A", qc.SignalType.SELL, 1.0, e.timestamp_ns)
+            enter, exit_ = (fast < slow, fast > slow) if short else (fast > slow, fast < slow)
+            open_sig, close_sig = (qc.SignalType.SELL, qc.SignalType.BUY) if short else (qc.SignalType.BUY, qc.SignalType.SELL)
+            if enter and not self.has_position("A"):
+                self.generate_signal("A", open_sig, 1.0, e.timestamp_ns)
+            elif exit_ and self.has_position("A"):
+                self.generate_signal("A", close_sig, 1.0, e.timestamp_ns)
 
         def reset(self):
             super().reset()
             self.closes = []
-            self.long = False
 
     cfg = qc.ExecutionConfig()
     cfg.maker_fee = cfg.taker_fee = cfg.slippage_pct = 0.0
@@ -66,7 +64,7 @@ def _run_qc(o, h, l, c):
     return eng
 
 
-def _run_bt(o, h, l, c, size):
+def _run_bt(o, h, l, c, size, short=False):
     df = pd.DataFrame({"open": o, "high": h, "low": l, "close": c, "volume": 1e6,
                        "openinterest": 0.0}, index=pd.date_range("2010-01-01", periods=N))
     trades = []
@@ -77,9 +75,10 @@ def _run_bt(o, h, l, c, size):
             self.s = bt.indicators.SMA(self.data.close, period=SLOW)
 
         def next(self):
-            if self.f[0] > self.s[0] and not self.position:
-                self.buy(size=size)
-            elif self.f[0] < self.s[0] and self.position:
+            enter, exit_ = (self.f[0] < self.s[0], self.f[0] > self.s[0]) if short else (self.f[0] > self.s[0], self.f[0] < self.s[0])
+            if enter and not self.position:
+                (self.sell if short else self.buy)(size=size)
+            elif exit_ and self.position:
                 self.close()
 
         def notify_trade(self, t):
@@ -95,10 +94,11 @@ def _run_bt(o, h, l, c, size):
     return trades, cerebro.broker.getvalue()
 
 
-def test_sma_crossover_matches_backtrader():
+@pytest.mark.parametrize("short", [False, True], ids=["long", "short"])
+def test_sma_crossover_matches_backtrader(short):
     o, h, l, c = _ohlc()
-    eng = _run_qc(o, h, l, c)
-    bt_pnls, bt_value = _run_bt(o, h, l, c, SIZE)
+    eng = _run_qc(o, h, l, c, short)
+    bt_pnls, bt_value = _run_bt(o, h, l, c, SIZE, short)
     qc_pnls = list(eng.get_trade_pnls())
     assert len(qc_pnls) >= 5
     assert len(qc_pnls) == len(bt_pnls)
