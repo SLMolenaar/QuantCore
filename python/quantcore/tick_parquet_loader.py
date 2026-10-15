@@ -131,15 +131,8 @@ class TickParquetLoader:
         return ticks
 
     @staticmethod
-    def load_numpy(filepath: str | Path) -> np.ndarray:
-        """
-        Load a Parquet tick file and return a (N, 4) float64 numpy array.
-
-        Column order: [timestamp_ns, price, quantity, side]
-        side encoding: 0.0 = Buy, 1.0 = Sell
-
-        Sorted by timestamp ascending.
-        """
+    def _read_sorted(filepath: str | Path):
+        """Read a tick file; return (timestamps_ns int64, values float64 (N, 3)) sorted by time."""
         try:
             import pyarrow.parquet as pq
         except ImportError as exc:
@@ -151,19 +144,45 @@ class TickParquetLoader:
         if not filepath.exists():
             raise FileNotFoundError(f"Could not open file: {filepath}")
 
-        table   = pq.read_table(filepath)
-        df      = table.to_pandas()
+        df      = pq.read_table(filepath).to_pandas()
         col_map = _resolve_columns(list(df.columns))
 
         timestamps = _to_timestamp_ns(df[col_map["timestamp"]])
-        has_side   = "side" in col_map
+        vals = np.empty((len(df), 3), dtype=np.float64)
+        vals[:, 0] = df[col_map["price"]].to_numpy(dtype=np.float64)
+        vals[:, 1] = df[col_map["quantity"]].to_numpy(dtype=np.float64)
+        vals[:, 2] = _parse_side_array(df[col_map["side"]]).astype(np.float64) \
+            if "side" in col_map else 0.0
 
-        arr = np.empty((len(df), 4), dtype=np.float64)
-        arr[:, 0] = timestamps.astype(np.float64)
-        arr[:, 1] = df[col_map["price"]].to_numpy(dtype=np.float64)
-        arr[:, 2] = df[col_map["quantity"]].to_numpy(dtype=np.float64)
-        arr[:, 3] = _parse_side_array(df[col_map["side"]]).astype(np.float64) \
-            if has_side else np.zeros(len(df), dtype=np.float64)
+        order = np.argsort(timestamps, kind="stable")
+        return timestamps[order], vals[order]
 
-        order = np.argsort(arr[:, 0], kind="stable")
-        return arr[order]
+    @staticmethod
+    def load_numpy(filepath: str | Path) -> np.ndarray:
+        """
+        Load a Parquet tick file and return a (N, 4) float64 numpy array.
+
+        Column order: [timestamp_ns, price, quantity, side]
+        side encoding: 0.0 = Buy, 1.0 = Sell
+
+        Sorted by timestamp ascending. Timestamps are float64 here, which cannot
+        represent epoch-nanosecond values exactly (~256 ns steps); for ns-resolution
+        ticks use load_numpy_exact().
+        """
+        ts, vals = TickParquetLoader._read_sorted(filepath)
+        arr = np.empty((len(ts), 4), dtype=np.float64)
+        arr[:, 0]  = ts.astype(np.float64)
+        arr[:, 1:] = vals
+        return arr
+
+    @staticmethod
+    def load_numpy_exact(filepath: str | Path):
+        """
+        Load a Parquet tick file with exact int64 nanosecond timestamps.
+
+        Returns (timestamps_ns, data): int64 (N,) and float64 (N, 3) with columns
+        [price, quantity, side]. Unpack straight into the engine:
+
+            engine.add_tick_data("AAPL", *TickParquetLoader.load_numpy_exact(path))
+        """
+        return TickParquetLoader._read_sorted(filepath)

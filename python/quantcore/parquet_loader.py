@@ -190,6 +190,31 @@ class ParquetDataLoader:
         return bars
 
     @staticmethod
+    def _read_sorted(filepath: str | Path):
+        """Read a bar file; return (timestamps_ns int64, values float64 (N, 5)) sorted by time."""
+        try:
+            import pyarrow.parquet as pq
+        except ImportError as exc:
+            raise ImportError(
+                "pyarrow is required for Parquet support: pip install pyarrow"
+            ) from exc
+
+        filepath = Path(filepath)
+        if not filepath.exists():
+            raise FileNotFoundError(f"Could not open file: {filepath}")
+
+        df      = pq.read_table(filepath).to_pandas()
+        col_map = _resolve_columns(list(df.columns))
+
+        timestamps = _to_timestamp_ns(df[col_map["timestamp"]])
+        vals = np.empty((len(df), 5), dtype=np.float64)
+        for j, name in enumerate(("open", "high", "low", "close", "volume")):
+            vals[:, j] = df[col_map[name]].to_numpy(dtype=np.float64)
+
+        order = np.argsort(timestamps, kind="stable")
+        return timestamps[order], vals[order]
+
+    @staticmethod
     def load_numpy(
             filepath: str | Path,
             symbol: str = "",
@@ -201,6 +226,8 @@ class ParquetDataLoader:
 
         This array can be passed directly to BacktestEngine.add_data(symbol, array),
         which uses a single boundary crossing instead of N BarData objects.
+        Timestamps are float64 here (~256 ns resolution at epoch-ns scale, which is
+        irrelevant for bars); load_numpy_exact() keeps exact int64 timestamps.
 
         Args:
             filepath: Path to the .parquet file.
@@ -210,33 +237,18 @@ class ParquetDataLoader:
         Returns:
             numpy array of shape (N, 6), sorted by timestamp ascending.
         """
-        try:
-            import pyarrow.parquet as pq
-        except ImportError as exc:
-            raise ImportError(
-                "pyarrow is required for Parquet support: pip install pyarrow"
-            ) from exc
+        ts, vals = ParquetDataLoader._read_sorted(filepath)
+        arr = np.empty((len(ts), 6), dtype=np.float64)
+        arr[:, 0]  = ts.astype(np.float64)
+        arr[:, 1:] = vals
+        return arr
 
-        import pandas as pd
+    @staticmethod
+    def load_numpy_exact(filepath: str | Path):
+        """
+        Like load_numpy(), but returns (timestamps_ns, data) with exact int64
+        timestamps (N,) and float64 (N, 5) [open, high, low, close, volume]:
 
-        filepath = Path(filepath)
-        if not filepath.exists():
-            raise FileNotFoundError(f"Could not open file: {filepath}")
-
-        table = pq.read_table(filepath)
-        df    = table.to_pandas()
-
-        col_map    = _resolve_columns(list(df.columns))
-        timestamps = _to_timestamp_ns(df[col_map["timestamp"]])
-
-        arr = np.empty((len(df), 6), dtype=np.float64)
-        arr[:, 0] = timestamps.astype(np.float64)
-        arr[:, 1] = df[col_map["open"]].to_numpy(dtype=np.float64)
-        arr[:, 2] = df[col_map["high"]].to_numpy(dtype=np.float64)
-        arr[:, 3] = df[col_map["low"]].to_numpy(dtype=np.float64)
-        arr[:, 4] = df[col_map["close"]].to_numpy(dtype=np.float64)
-        arr[:, 5] = df[col_map["volume"]].to_numpy(dtype=np.float64)
-
-        # sort by timestamp
-        order = np.argsort(arr[:, 0], kind="stable")
-        return arr[order]
+            engine.add_data("AAPL", *ParquetDataLoader.load_numpy_exact(path))
+        """
+        return ParquetDataLoader._read_sorted(filepath)

@@ -366,6 +366,30 @@ Use generate_stop() when guaranteed execution matters more than price.
             },
             py::arg("symbol"), py::arg("data"))
 
+        // Exact timestamps: int64 (N,) ns + float64 (N, 5) [open, high, low, close, volume].
+        // Avoids the float64 precision loss of the single-array form.
+        .def("add_data",
+            [](BacktestEngine& self, const std::string& symbol,
+               py::array_t<int64_t, py::array::c_style | py::array::forcecast> ts,
+               py::array_t<double,  py::array::c_style | py::array::forcecast> data) {
+                py::buffer_info tb = ts.request();
+                py::buffer_info db = data.request();
+                if (tb.ndim != 1 || db.ndim != 2 || db.shape[1] != 5 || db.shape[0] != tb.shape[0])
+                    throw std::invalid_argument(
+                        "expected timestamps_ns of shape (N,) and data of shape (N, 5): "
+                        "[open, high, low, close, volume]");
+                const auto* t = static_cast<const int64_t*>(tb.ptr);
+                const auto* d = static_cast<const double*>(db.ptr);
+                BarSeries bars;
+                bars.reserve(static_cast<size_t>(tb.shape[0]));
+                for (Py_ssize_t i = 0; i < tb.shape[0]; ++i) {
+                    const double* r = d + i * 5;
+                    bars.emplace_back(symbol, t[i], r[0], r[1], r[2], r[3], r[4]);
+                }
+                self.add_data(symbol, bars);
+            },
+            py::arg("symbol"), py::arg("timestamps_ns"), py::arg("data"))
+
         // List[TickData] overload
         .def("add_tick_data",
              py::overload_cast<const std::string&, const TickSeries&>(&BacktestEngine::add_tick_data),
@@ -385,6 +409,25 @@ Use generate_stop() when guaranteed execution matters more than price.
                 TickSeries ticks;
                 ticks.reserve(static_cast<size_t>(n));
                 const double* ptr = static_cast<const double*>(buf.ptr);
+
+                // float64 has a 53-bit mantissa: epoch-ns timestamps (~1.7e18) are
+                // stored in steps of 256 ns, so sub-microsecond tick order can be
+                // lost. Warn when a timestamp is beyond 2^53 and is not a whole
+                // microsecond (an exactly representable value would be).
+                for (Py_ssize_t i = 0; i < n; ++i) {
+                    double ts = ptr[i * 4];
+                    if (ts > 9007199254740992.0 &&
+                        static_cast<int64_t>(ts) % 1000 != 0) {
+                        if (PyErr_WarnEx(PyExc_UserWarning,
+                                "add_tick_data: nanosecond timestamps in a float64 array lose "
+                                "precision (~256 ns steps), so ticks closer than that can be "
+                                "reordered or merged. Use load_numpy_exact() with add_tick_data(symbol, timestamps_ns, data), or List[TickData], for ns-resolution data.",
+                                1) < 0)
+                            throw py::error_already_set();
+                        break;
+                    }
+                }
+
                 for (Py_ssize_t i = 0; i < n; ++i) {
                     const double* row = ptr + i * 4;
                     Side side = (row[3] >= 0.5) ? Side::Sell : Side::Buy;
@@ -395,6 +438,30 @@ Use generate_stop() when guaranteed execution matters more than price.
                 self.add_tick_data(symbol, ticks);
             },
             py::arg("symbol"), py::arg("data"))
+
+        // Exact timestamps: int64 (N,) ns + float64 (N, 3) [price, quantity, side].
+        .def("add_tick_data",
+            [](BacktestEngine& self, const std::string& symbol,
+               py::array_t<int64_t, py::array::c_style | py::array::forcecast> ts,
+               py::array_t<double,  py::array::c_style | py::array::forcecast> data) {
+                py::buffer_info tb = ts.request();
+                py::buffer_info db = data.request();
+                if (tb.ndim != 1 || db.ndim != 2 || db.shape[1] != 3 || db.shape[0] != tb.shape[0])
+                    throw std::invalid_argument(
+                        "expected timestamps_ns of shape (N,) and data of shape (N, 3): "
+                        "[price, quantity, side]");
+                const auto* t = static_cast<const int64_t*>(tb.ptr);
+                const auto* d = static_cast<const double*>(db.ptr);
+                TickSeries ticks;
+                ticks.reserve(static_cast<size_t>(tb.shape[0]));
+                for (Py_ssize_t i = 0; i < tb.shape[0]; ++i) {
+                    const double* r = d + i * 3;
+                    ticks.emplace_back(symbol, t[i], r[0], r[1],
+                                       r[2] >= 0.5 ? Side::Sell : Side::Buy);
+                }
+                self.add_tick_data(symbol, ticks);
+            },
+            py::arg("symbol"), py::arg("timestamps_ns"), py::arg("data"))
 
         .def("set_strategy",           &BacktestEngine::set_strategy,
              py::arg("strategy"), py::keep_alive<1, 2>())

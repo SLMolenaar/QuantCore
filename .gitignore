@@ -1,0 +1,7 @@
+build/
+cmake-build-*/
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+.idea/

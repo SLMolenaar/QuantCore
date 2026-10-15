@@ -510,6 +510,11 @@ Load tick data with `add_tick_data` instead of `add_data`. Bar and tick series c
 engine = qc.BacktestEngine(100_000.0)
 engine.add_tick_data('AAPL', ticks)   # List[TickData]
 engine.add_tick_data('AAPL', arr)     # (N, 4) float64 numpy array
+# Note: timestamps are float64 in this path (~256 ns resolution at epoch-ns scale);
+# a UserWarning is raised if precision loss is detected. For ns-resolution ticks use
+# the exact path (int64 timestamps + float64 values):
+ts, vals = TickParquetLoader.load_numpy_exact('data/aapl_ticks.parquet')
+engine.add_tick_data('AAPL', ts, vals)      # same for bars: ParquetDataLoader.load_numpy_exact + add_data
 ```
 
 The numpy path for tick data uses a single boundary crossing instead of N individual pybind11 object constructions and is roughly 3–5x faster for large datasets. Column order: `[timestamp_ns, price, quantity, side]` with side encoded as `0.0 = Buy, 1.0 = Sell`.

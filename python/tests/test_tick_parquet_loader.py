@@ -197,3 +197,52 @@ class TestLoadNumpy:
 
         with pytest.raises(ValueError, match="missing required columns"):
             TickParquetLoader.load_numpy(path)
+
+
+def test_add_tick_data_numpy_warns_on_ns_precision_loss():
+    import warnings
+    import numpy as np
+    import quantcore as qc
+    base = 1_700_000_000_000_000_000
+    arr = np.array([[base + 1, 100.0, 1.0, 0.0],
+                    [base + 1_000_257, 100.0, 1.0, 0.0]], dtype=np.float64)
+    eng = qc.BacktestEngine(100_000.0)
+    with pytest.warns(UserWarning, match="lose precision"):
+        eng.add_tick_data("T", arr)
+    # whole-microsecond timestamps below 2^53 ns scale or exact multiples don't warn
+    ok = np.array([[1_700_000_000_000_000_000, 100.0, 1.0, 0.0]], dtype=np.float64)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        qc.BacktestEngine(100_000.0).add_tick_data("T", ok)
+
+
+def test_exact_timestamp_path_preserves_ns_and_runs(tmp_path):
+    import numpy as np
+    import pandas as pd
+    import quantcore as qc
+    base = 1_700_000_000_000_000_001            # odd ns: not representable in float64
+    ts = [base, base + 1, base + 2]
+    path = tmp_path / "t.parquet"
+    pd.DataFrame({"timestamp": ts, "price": [100.0, 100.0, 100.0],
+                  "quantity": [1.0, 1.0, 1.0], "side": ["B", "S", "B"]}).to_parquet(path)
+
+    t, vals = qc.TickParquetLoader.load_numpy_exact(path)
+    assert t.dtype == np.int64 and list(t) == ts          # exact
+    assert vals.shape == (3, 3)
+    assert int(qc.TickParquetLoader.load_numpy(path)[0, 0]) != base   # float path is lossy
+
+    eng = qc.BacktestEngine(100_000.0)
+    eng.add_tick_data("T", t, vals)                       # no warning, no loss
+    eng.set_strategy(qc.BuyAndHold())
+    eng.run()
+    assert eng.get_timestamps()[0] == base                # exact first timestamp survives
+
+
+def test_exact_overload_validates_shapes():
+    import numpy as np
+    import quantcore as qc
+    eng = qc.BacktestEngine(100_000.0)
+    with pytest.raises(Exception):
+        eng.add_tick_data("T", np.arange(3, dtype=np.int64), np.zeros((2, 3)))
+    with pytest.raises(Exception):
+        eng.add_data("T", np.arange(3, dtype=np.int64), np.zeros((3, 4)))

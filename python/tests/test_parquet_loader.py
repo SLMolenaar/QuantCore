@@ -225,3 +225,21 @@ class TestLoadNumpy:
         arr = ParquetDataLoader.load_numpy(path)
 
         assert arr.shape == (3, 6)
+
+
+def test_bars_exact_roundtrip(tmp_path):
+    import numpy as np
+    import pandas as pd
+    import quantcore as qc
+    base = 1_700_000_000_000_000_001
+    path = tmp_path / "b.parquet"
+    pd.DataFrame({"timestamp": [base, base + 86_400_000_000_000],
+                  "open": [100.0, 101.0], "high": [102.0, 103.0], "low": [99.0, 100.0],
+                  "close": [101.0, 102.0], "volume": [1e6, 1e6]}).to_parquet(path)
+    ts, vals = qc.ParquetDataLoader.load_numpy_exact(path)
+    assert ts.dtype == np.int64 and ts[0] == base and vals.shape == (2, 5)
+    eng = qc.BacktestEngine(100_000.0)
+    eng.add_data("B", ts, vals)
+    eng.set_strategy(qc.BuyAndHold())
+    eng.run()
+    assert eng.get_timestamps()[0] == base
