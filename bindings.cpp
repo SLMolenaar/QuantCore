@@ -303,7 +303,7 @@ Use generate_stop() when guaranteed execution matters more than price.
              [](Strategy& self) -> py::object {
                  PortfolioContext* p = self.get_portfolio();
                  if (!p) return py::none();
-                 return py::cast(p, py::return_value_policy::reference);
+                 return py::cast(p->shared_from_this());   // shared owner: outlives the engine
              });
 
     // ============================================================================

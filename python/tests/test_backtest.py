@@ -355,3 +355,17 @@ class TestMarketMakerRegression:
     def test_execution_engine_outlives_temporary_engine(self):
         ee = self._run(0.0001).get_execution_engine("A")
         assert ee.get_position() > 0
+
+
+def test_strategy_portfolio_outlives_engine():
+    import gc
+    DAY = 86_400 * 10**9
+    bars = [qc.BarData("A", (i + 1) * DAY, 100, 101, 99, 100, 1e6) for i in range(20)]
+    st = qc.BuyAndHold()
+    eng = qc.create_backtest(100_000.0, {"A": bars}, st)
+    eng.run()
+    p = st.get_portfolio()
+    cash = p.get_cash()
+    del eng
+    gc.collect()
+    assert p.get_cash() == cash

@@ -20,7 +20,7 @@ namespace quantcore {
  * This enables strategies to make portfolio-level decisions
  * rather than treating each asset independently.
  */
-class PortfolioContext {
+class PortfolioContext : public std::enable_shared_from_this<PortfolioContext> {
 public:
     PortfolioContext(double initial_capital)
         : initial_capital_(initial_capital)
