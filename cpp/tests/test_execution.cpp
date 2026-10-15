@@ -715,3 +715,39 @@ TEST_F(ExecutionEngineTest, ZeroQuantityOrderRejected) {
         );
     }, std::invalid_argument);
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests for review fixes
+// ---------------------------------------------------------------------------
+
+TEST(ExecutionRegression, MarketOrdersPayTakerFeeOnBothSides) {
+    for (Side s : {Side::Buy, Side::Sell}) {
+        quantcore::ExecutionEngine e("X");
+        e.get_orderbook().AddOrder(std::make_shared<Order>(OrderType::GoodTillCancel, 1, Side::Sell, 10000, 100.0));
+        e.get_orderbook().AddOrder(std::make_shared<Order>(OrderType::GoodTillCancel, 2, Side::Buy,   9999, 100.0));
+        e.execute_order(std::make_shared<Order>(OrderType::Market, 10, s, 0, 10.0));
+        EXPECT_NEAR(e.get_total_fees(), 100.0 * 10 * quantcore::defaults::TAKER_FEE, 1e-3);  // sell hits the 99.99 bid
+    }
+}
+
+TEST(ExecutionRegression, ApplyTradesCapturesRestingOrderFill) {
+    quantcore::ExecutionEngine e("X");
+    e.execute_order(std::make_shared<Order>(OrderType::GoodTillCancel, 1, Side::Buy, 9950, 10.0));
+    // Someone else's sell crosses our resting bid.
+    auto trades = e.get_orderbook().AddOrder(
+        std::make_shared<Order>(OrderType::GoodTillCancel, 99, Side::Sell, 9900, 10.0));
+    auto fills = e.apply_trades(trades);
+    ASSERT_EQ(fills.size(), 1u);
+    EXPECT_EQ(fills[0].order_id, 1u);
+    EXPECT_DOUBLE_EQ(e.get_position(), 10.0);
+}
+
+TEST(OrderbookRegression, CancelPreservesTimePriority) {
+    Orderbook ob;
+    for (OrderId i = 1; i <= 3; ++i)
+        ob.AddOrder(std::make_shared<Order>(OrderType::GoodTillCancel, i, Side::Sell, 10000, 1.0));
+    ob.CancelOrder(1);
+    auto t = ob.AddOrder(std::make_shared<Order>(OrderType::GoodTillCancel, 9, Side::Buy, 10000, 1.0));
+    ASSERT_EQ(t.size(), 1u);
+    EXPECT_EQ(t[0].GetAskTrade().orderId_, 2u);
+}

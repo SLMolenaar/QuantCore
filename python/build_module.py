@@ -166,6 +166,8 @@ def configure_cmake(python_dir, build_dir, cmake_path, python_exe):
         "-S", ".",
         "-B", "build",
         "-DCMAKE_BUILD_TYPE=Release",
+        f"-DPython_EXECUTABLE={python_exe}",   # pybind11 >= 3
+        f"-DPYTHON_EXECUTABLE={python_exe}",   # pybind11 2.x
         f"-DPython3_EXECUTABLE={python_exe}",
         f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
     ]

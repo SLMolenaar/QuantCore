@@ -2,6 +2,9 @@
 
 #include <string>
 #include <map>
+#include <cmath>
+#include <stdexcept>
+#include "../orderbook/Ordertype.h"
 
 namespace quantcore {
 

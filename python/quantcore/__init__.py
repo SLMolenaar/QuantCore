@@ -10,7 +10,7 @@ try:
 except ImportError as e:
     raise ImportError(
         f"Failed to import C++ extension.\n"
-        f"Module should be at: {_current_dir / '_core.cp312-win_amd64.pyd'}\n"
+        f"Looked for a compiled _core extension in: {_current_dir}\n"
         f"Did you build it? Run: python python/build_module.py"
     ) from e
 

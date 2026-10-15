@@ -315,7 +315,8 @@ TEST_F(BacktestEngineTest, FixedPercentageProducesEqualDollarPnlAcrossPrices) {
     double exp_realized   = run(2.0);
 
     EXPECT_NE(cheap_realized, 0.0) << "No trades occurred";
-    EXPECT_NEAR(cheap_realized, exp_realized, 0.01);
+    // Prices live on a 1-cent grid, so scale invariance only holds to ~0.1%.
+    EXPECT_NEAR(cheap_realized, exp_realized, std::abs(cheap_realized) * 1e-3);
 }
 
 TEST_F(BacktestEngineTest, LargerAllocationProducesLargerPosition) {
@@ -691,4 +692,45 @@ TEST_F(BacktestEngineTest, SimultaneousSameTimestampBarsHandled) {
     EXPECT_NO_THROW(engine_->run());
 
     EXPECT_TRUE(std::isfinite(engine_->get_total_pnl()));
+}
+
+// ---------------------------------------------------------------------------
+// Regression tests for review fixes
+// ---------------------------------------------------------------------------
+
+TEST(EventQueueRegression, SameTimestampSameTypeIsFifo) {
+    quantcore::EventQueue q;
+    for (int i = 0; i < 20; ++i)
+        q.push(std::make_shared<quantcore::SignalEvent>(
+            "S" + std::to_string(i), 5, quantcore::SignalType::BUY, 1.0, "t"));
+    for (int i = 0; i < 20; ++i) {
+        auto sig = std::static_pointer_cast<quantcore::SignalEvent>(q.pop());
+        EXPECT_EQ(sig->get_symbol(), "S" + std::to_string(i));
+    }
+}
+
+namespace {
+// Buys on the first bar, then places a sell stop; used to check stop behaviour.
+class StopOnlyStrategy : public quantcore::Strategy {
+public:
+    StopOnlyStrategy() : Strategy("StopOnly") {}
+    void on_data(const quantcore::MarketDataEvent& e) override {
+        if (n_++ == 0) generate_stop(e.get_symbol(), Side::Sell, 50.0, 0.0, e.get_timestamp());
+    }
+    int n_ = 0;
+};
+}
+
+TEST(BacktestEngineRegression, StopWithNoPositionDoesNotOpenShort) {
+    quantcore::BacktestEngine eng(100000.0);
+    quantcore::BarSeries bars;
+    for (int i = 0; i < 10; ++i) {
+        double p = 100.0 - 10.0 * i;   // falls through the stop at 50
+        bars.push_back(quantcore::BarData("T", (int64_t)(i + 1) * 86'400'000'000'000LL,
+                                          p, p + 1, p - 1, p, 1e6));
+    }
+    eng.add_data("T", bars);
+    eng.set_strategy(std::make_shared<StopOnlyStrategy>());
+    eng.run();
+    EXPECT_DOUBLE_EQ(eng.get_execution_engine("T")->get_position(), 0.0);
 }

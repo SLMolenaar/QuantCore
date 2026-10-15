@@ -64,6 +64,11 @@ class BacktestConfig:
     risk_enabled:     bool  = True
 
 
+def _ppy(config):
+    """Annualisation factor for metrics: the config's, else the 252 default."""
+    return config.bars_per_year if config is not None else None
+
+
 def _run_configured_backtest(strategy, data, capital, config):
     import quantcore as qc
     from quantcore._engine_builder import build_engine
@@ -194,6 +199,7 @@ def _backtest_worker(args: tuple) -> Optional[dict]:
         metrics = calculate_all_metrics(
             equity_curve,
             trade_pnls=results.trade_pnls if results.trade_pnls else None,
+            periods_per_year=_ppy(config),
         )
 
         return {
@@ -264,6 +270,7 @@ def _window_worker(args: tuple) -> Optional[dict]:
             m = calculate_all_metrics(
                 equity_curve,
                 trade_pnls=oos_results.trade_pnls if oos_results.trade_pnls else None,
+                periods_per_year=_ppy(config),
             )
             oos = {
                 'sharpe_ratio': m.sharpe_ratio,
@@ -802,6 +809,7 @@ def _mc_collect_with_curves(
             m = calculate_all_metrics(
                 ec,
                 trade_pnls=bt.trade_pnls if bt.trade_pnls else None,
+                periods_per_year=_ppy(config),
             )
             results.append({
                 'sharpe_ratio': m.sharpe_ratio,

@@ -27,10 +27,10 @@ def infer_periods_per_year(timestamps: np.ndarray) -> int:
     clamped to [1, 525_960] (1 per year to 1 per minute).
 
     Common outputs:
-      ~252        daily bars
-      ~1_260      weekly bars (but these would read as ~252*5)
-      ~362_880    1-minute snapshots  (252 * 1440)
-      ~525_960    1-second snapshots  (252 * 24 * 60 * 60 / ~1.16)
+      252         daily bars without weekend bars (trading-day data)
+      365         daily bars that include weekends (24/7 markets)
+      ~52         weekly bars
+      ~525_960    1-minute snapshots (clamped; anything finer is clamped too)
 
     Falls back to 252 when fewer than 2 timestamps are provided or the
     median gap is zero.
@@ -46,6 +46,14 @@ def infer_periods_per_year(timestamps: np.ndarray) -> int:
     median_gap_ns = float(np.median(positive_gaps))
     if median_gap_ns <= 0:
         return 252
+
+    ns_per_day = 86_400 * 1_000_000_000
+    if 20 * 3600 * 1_000_000_000 <= median_gap_ns <= 28 * 3600 * 1_000_000_000:
+        # Daily bars: 252 for trading-day data (no weekend bars), 365 for 24/7
+        # markets. Day-of-week from the epoch (1970-01-01 was a Thursday).
+        days    = timestamps.astype(np.int64) // ns_per_day
+        weekend = np.isin((days + 3) % 7, (5, 6))
+        return 365 if weekend.any() else 252
 
     ns_per_year = 365.25 * 24 * 3600 * 1_000_000_000
     periods     = ns_per_year / median_gap_ns
@@ -387,12 +395,10 @@ def calculate_annualized_return(equity_curve: np.ndarray, periods_per_year: int 
         return 0.0
 
     # total_return is the growth factor (e.g. 0.5 means portfolio halved).
-    # Taking a fractional power of a non-positive number is undefined in real
-    # arithmetic and produces a RuntimeWarning + NaN. Sign-preserve instead:
-    # treat the magnitude as if it were positive, compute the annualised rate,
-    # then restore the sign.
+    # A fractional power of a non-positive number is undefined, so clamp.
     if total_return <= 0:
-        annualized = -(abs(total_return) ** (1.0 / years) - 1.0) * 100.0
+        # Equity wiped out (or negative): the annualised rate is -100%.
+        annualized = -100.0
     else:
         annualized = (total_return ** (1.0 / years) - 1.0) * 100.0
 
@@ -798,8 +804,9 @@ def monthly_returns(equity_curve: np.ndarray, timestamps: np.ndarray) -> pd.Data
     })
 
     pivot = monthly_df.pivot(index='year', columns='month', values='return')
-    pivot.columns = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+             'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    pivot.columns = [names[m - 1] for m in pivot.columns]
 
     return pivot
 

@@ -65,7 +65,7 @@ public:
     void add_data(const std::string& symbol, const BarSeries& bars) {
         if (bars.empty())
             throw std::invalid_argument("Cannot add empty bar series");
-        if (data_.find(symbol) == data_.end()) {
+        if (symbol_order_index_.find(symbol) == symbol_order_index_.end()) {
             symbol_order_index_[symbol] = symbol_order_.size();
             symbol_order_.push_back(symbol);
         }
@@ -79,11 +79,9 @@ public:
     void add_tick_data(const std::string& symbol, const TickSeries& ticks) {
         if (ticks.empty())
             throw std::invalid_argument("Cannot add empty tick series");
-        if (tick_data_.find(symbol) == tick_data_.end()) {
-            if (data_.find(symbol) == data_.end()) {
-                symbol_order_index_[symbol] = symbol_order_.size();
-                symbol_order_.push_back(symbol);
-            }
+        if (symbol_order_index_.find(symbol) == symbol_order_index_.end()) {
+            symbol_order_index_[symbol] = symbol_order_.size();
+            symbol_order_.push_back(symbol);
         }
         tick_data_[symbol]     = ticks;
         data_.erase(symbol);
@@ -224,6 +222,12 @@ public:
                     flatten_all_positions(event->get_timestamp());
             }
         }
+
+        // Fills after the last market-data event (final orders, halt flatten)
+        // still move equity; fold them into the result.
+        update_portfolio();
+        if (equity_snapshot_interval_ns_ == 0 && equity_.size() > 1)
+            equity_.back() = curr_cap_;
 
         return curr_cap_;
     }
@@ -471,12 +475,16 @@ private:
             // triggered order, for the same wash-trade reason as signals.
             cancel_stale_strategy_orders(symbol, engine);
 
-            // Resolve quantity: 0.0 means "close full position".
-            double qty = ps.quantity;
-            if (qty < MIN_ORDER_QTY) {
-                qty = std::abs(engine.get_position());
-                if (qty < MIN_ORDER_QTY) continue; // no position to close
-            }
+            // Stops are reduce-only: a sell stop protects a long, a buy stop a
+            // short. 0.0 quantity means "close the full position". If the
+            // position is flat or has flipped, the stop is dropped instead of
+            // opening/adding a position in the wrong direction.
+            double pos     = engine.get_position();
+            double closable = (ps.side == Side::Sell) ? pos : -pos;
+            if (closable < MIN_ORDER_QTY) continue;
+            double qty = (ps.quantity < MIN_ORDER_QTY)
+                ? closable
+                : std::min(ps.quantity, closable);
 
             // Apply latency offset so the triggered order is consistent with
             // normal signal-to-order timing.
@@ -683,6 +691,7 @@ private:
         auto md     = std::static_pointer_cast<MarketDataEvent>(event);
         auto symbol = md->get_symbol();
         last_px_[symbol] = md->get_close();
+        risk_mgr_->update_price(symbol, md->get_close());
 
         auto& hist = price_history_[symbol];
         hist.push_back(md->get_close());
@@ -711,8 +720,18 @@ private:
         auto ee_it = engines_.find(symbol);
         if (ee_it != engines_.end()) {
             auto mm_it = mms_.find(symbol);
-            if (mm_it != mms_.end() && should_refresh_mm(symbol, md->get_timestamp()))
-                mm_it->second->update_quotes(*ee_it->second, *md);
+            if (mm_it != mms_.end() && should_refresh_mm(symbol, md->get_timestamp())) {
+                // A refreshed quote may cross our resting orders; those trades
+                // must reach the position/fill bookkeeping.
+                auto trades = mm_it->second->update_quotes(*ee_it->second, *md);
+                if (!trades.empty()) {
+                    auto fills = ee_it->second->apply_trades(trades, false);
+                    for (const auto& f : fills)
+                        push_fill(symbol, md->get_timestamp(), f.order_id, f.side,
+                                  f.quantity, f.price, ee_it->second->get_slippage_pct(),
+                                  false);
+                }
+            }
         }
 
         // Check pending stops for this symbol before calling on_data(), so
@@ -832,6 +851,17 @@ private:
         eq_.push(ord);
     }
 
+    void push_fill(const std::string& symbol, int64_t timestamp, uint64_t order_id,
+                   Side side, double qty, Price price_cents, double slippage_pct,
+                   bool is_taker) {
+        double raw   = price_cents / 100.0;
+        double price = (side == Side::Buy) ? raw * (1.0 + slippage_pct)
+                                           : raw * (1.0 - slippage_pct);
+        double fee   = is_taker ? exec_config_.taker_fee : exec_config_.maker_fee;
+        eq_.push(make_event<FillEvent>(symbol, timestamp, order_id, side,
+                                       qty, price, price * qty * fee));
+    }
+
     void handle_ord(EventPtr event) {
         auto ord = std::static_pointer_cast<OrderEvent>(event);
         auto it  = engines_.find(ord->get_symbol());
@@ -860,7 +890,7 @@ private:
             );
         }
 
-        Price    px_cents = static_cast<Price>(ord->get_price() * 100.0);
+        Price    px_cents = static_cast<Price>(std::llround(ord->get_price() * 100.0));
         Quantity qty      = ord->get_quantity();
 
         auto order = std::make_shared<Order>(
@@ -873,24 +903,15 @@ private:
 
         const double slippage_pct = engine->get_slippage_pct();
         auto trades = engine->execute_order(order);
+        const bool is_taker = engine->last_order_was_taker();
 
         for (const auto& trade : trades) {
             const TradeInfo& our_trade = (ord->get_side() == Side::Buy)
                 ? trade.GetBidTrade()
                 : trade.GetAskTrade();
-
-            double raw_price  = our_trade.price_ / 100.0;
-            double fill_price = (ord->get_side() == Side::Buy)
-                ? raw_price * (1.0 + slippage_pct)
-                : raw_price * (1.0 - slippage_pct);
-
-            double commission = fill_price * our_trade.quantity_ * exec_config_.taker_fee;
-
-            eq_.push(make_event<FillEvent>(
-                ord->get_symbol(), ord->get_timestamp(),
-                ord->get_order_id(), ord->get_side(),
-                our_trade.quantity_, fill_price, commission
-            ));
+            push_fill(ord->get_symbol(), ord->get_timestamp(), ord->get_order_id(),
+                      ord->get_side(), our_trade.quantity_, our_trade.price_,
+                      slippage_pct, is_taker);
         }
     }
 
@@ -915,6 +936,8 @@ private:
             double new_pos = ee_it->second->get_position();
             strat_->set_position(fill->get_symbol(), new_pos);
             risk_mgr_->set_position(fill->get_symbol(), new_pos, fill->get_price());
+            if (std::abs(new_pos) < MIN_ORDER_QTY)
+                pending_stops_[fill->get_symbol()].clear();   // stale protective stops
         }
 
         strat_->on_fill(*fill);

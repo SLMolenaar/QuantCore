@@ -32,7 +32,9 @@ public:
     {
     }
 
-    void update_quotes(ExecutionEngine& engine, const MarketDataEvent& event) {
+    // Returns trades produced while placing quotes (a quote can cross one of the
+    // strategy's resting orders). The caller must feed them to the engine.
+    Trades update_quotes(ExecutionEngine& engine, const MarketDataEvent& event) {
         cancel_orders(engine);
 
         double  mid_price = event.get_close();
@@ -49,8 +51,10 @@ public:
 
         update_spread(volatility, volume, time_factor);
 
-        place_orders(engine, mid_price, volume, Side::Buy);
-        place_orders(engine, mid_price, volume, Side::Sell);
+        Trades trades;
+        place_orders(engine, mid_price, volume, Side::Buy,  trades);
+        place_orders(engine, mid_price, volume, Side::Sell, trades);
+        return trades;
     }
 
     double get_spread() const { return current_spread_pct_; }
@@ -91,7 +95,7 @@ private:
     }
 
     void place_orders(ExecutionEngine& engine, double mid_price,
-                      double volume, Side side) {
+                      double volume, Side side, Trades& trades) {
         auto& ob = engine.get_orderbook();
 
         for (int level = 0; level < num_levels_; ++level) {
@@ -103,7 +107,7 @@ private:
 
             price = std::max(0.01, price);
 
-            Price    price_cents = static_cast<Price>(price * 100.0);
+            Price    price_cents = static_cast<Price>(std::llround(price * 100.0));
             Quantity quantity    = calc_quantity(level, volume);
 
             if (quantity < 1e-8) {
@@ -120,7 +124,8 @@ private:
                 quantity
             );
 
-            ob.AddOrder(order);
+            auto t = ob.AddOrder(order);
+            trades.insert(trades.end(), t.begin(), t.end());
             active_orders_.push_back(order->GetOrderId());
         }
     }

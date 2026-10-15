@@ -48,9 +48,11 @@ public:
 
         if (symbol == symbol1_) {
             price1_ = event.get_close();
+            ts1_    = event.get_timestamp();
             symbol1_seen_ = true;
         } else if (symbol == symbol2_) {
             price2_ = event.get_close();
+            ts2_    = event.get_timestamp();
             symbol2_seen_ = true;
         } else {
             return;
@@ -76,6 +78,11 @@ public:
             }
             return;
         }
+
+        // Only use a spread when both legs are priced at the same timestamp,
+        // otherwise each bar would enter the history twice (once with a stale leg).
+        // Both symbols must therefore share timestamps.
+        if (ts1_ != ts2_) return;
 
         double spread = std::log(price1_ / price2_);
         spread_history_.push_back(spread);
@@ -118,6 +125,7 @@ public:
         spread_history_.clear();
         price1_          = 0.0;
         price2_          = 0.0;
+        ts1_ = ts2_      = -1;
         direction_       = Direction::NONE;
         symbol1_seen_    = false;
         symbol2_seen_    = false;
@@ -145,6 +153,8 @@ private:
     std::deque<double> spread_history_;
     double             price1_;
     double             price2_;
+    int64_t            ts1_ = -1;
+    int64_t            ts2_ = -1;
 
     bool   symbol1_seen_;
     bool   symbol2_seen_;

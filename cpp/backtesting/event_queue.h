@@ -17,7 +17,7 @@ namespace quantcore {
             if (!event) {
                 throw std::invalid_argument("Cannot push null event");
             }
-            queue_.push(event);
+            queue_.push({std::move(event), next_seq_++});
         }
 
         EventPtr pop() {
@@ -25,7 +25,7 @@ namespace quantcore {
                 throw std::runtime_error("Cannot pop from empty queue");
             }
 
-            EventPtr event = queue_.top();
+            EventPtr event = queue_.top().ev;
             queue_.pop();
             return event;
         }
@@ -34,7 +34,7 @@ namespace quantcore {
             if (queue_.empty()) {
                 throw std::runtime_error("Queue is empty");
             }
-            return queue_.top();
+            return queue_.top().ev;
         }
 
         bool empty() const {
@@ -53,21 +53,24 @@ namespace quantcore {
 
     private:
         // Comparator for min-heap
+        struct Entry {
+            EventPtr ev;
+            uint64_t seq;   // insertion order, makes ties deterministic (FIFO)
+        };
+
         struct EventComparator {
-            bool operator()(const EventPtr& lhs, const EventPtr& rhs) const {
-                if (lhs->get_timestamp() != rhs->get_timestamp()) {
-                    return lhs->get_timestamp() > rhs->get_timestamp();
-                }
+            bool operator()(const Entry& l, const Entry& r) const {
+                if (l.ev->get_timestamp() != r.ev->get_timestamp())
+                    return l.ev->get_timestamp() > r.ev->get_timestamp();
                 // Tie-break by event type: m_data < sig < order < fill
-                return lhs->get_type() > rhs->get_type();
+                if (l.ev->get_type() != r.ev->get_type())
+                    return l.ev->get_type() > r.ev->get_type();
+                return l.seq > r.seq;
             }
         };
 
-        std::priority_queue<
-            EventPtr,
-            std::vector<EventPtr>,
-            EventComparator
-        > queue_;
+        uint64_t next_seq_ = 0;
+        std::priority_queue<Entry, std::vector<Entry>, EventComparator> queue_;
     };
 
 }

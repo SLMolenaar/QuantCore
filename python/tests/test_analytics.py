@@ -24,6 +24,8 @@ from quantcore.analytics import (
     rolling_sharpe,
     rolling_volatility,
     PerformanceMetrics,
+    infer_periods_per_year,
+    monthly_returns,
 )
 
 MAX_RATIO = 99.99
@@ -327,3 +329,29 @@ class TestEdgeCases:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for review fixes
+# ---------------------------------------------------------------------------
+
+class TestReviewFixes:
+    NS_DAY = 86_400 * 1_000_000_000
+
+    def test_infer_periods_daily_trading_days_is_252(self):
+        days = [d for d in range(18993, 18993 + 400) if (d + 3) % 7 not in (5, 6)]
+        ts = np.array(days, dtype=np.int64) * self.NS_DAY
+        assert infer_periods_per_year(ts) == 252
+
+    def test_infer_periods_daily_with_weekends_is_365(self):
+        ts = np.arange(18993, 18993 + 400, dtype=np.int64) * self.NS_DAY
+        assert infer_periods_per_year(ts) == 365
+
+    def test_annualized_return_wiped_out_is_minus_100(self):
+        assert calculate_annualized_return(np.array([100.0, 50.0, 0.0])) == -100.0
+        assert calculate_annualized_return(np.array([100.0, 50.0, -10.0])) == -100.0
+
+    def test_monthly_returns_short_history(self):
+        ts = (np.arange(60, dtype=np.int64) + 18993) * self.NS_DAY
+        df = monthly_returns(np.linspace(100, 110, 60), ts)
+        assert list(df.columns) == ['Jan', 'Feb', 'Mar']

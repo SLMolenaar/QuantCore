@@ -4,6 +4,7 @@
 #include <string>
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace quantcore {
 

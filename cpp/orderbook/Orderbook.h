@@ -409,14 +409,11 @@ public:
             ? asks_.at(price)
             : bids_.at(price);
 
-        // Swap-and-pop: move the last element into the cancelled slot, then
-        // pop the back. This is O(1) and keeps the vector contiguous.
-        // We must update the swapped order's stored index to reflect its new position.
-        if (idx != orders.size() - 1) {
-            orders[idx] = std::move(orders.back());
-            orders_.at(orders[idx]->GetOrderId()).location_ = idx;
-        }
-        orders.pop_back();
+        // Erase in place to preserve time priority (FIFO), then re-index the
+        // orders that shifted down.
+        orders.erase(orders.begin() + idx);
+        for (std::size_t i = idx; i < orders.size(); ++i)
+            orders_.at(orders[i]->GetOrderId()).location_ = i;
 
         if (side == Side::Sell) {
             if (orders.empty()) asks_.erase(price);

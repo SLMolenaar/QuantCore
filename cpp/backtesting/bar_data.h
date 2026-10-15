@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <cmath>
 #include <stdexcept>
 
 namespace quantcore {
@@ -43,6 +44,10 @@ namespace quantcore {
 
     private:
         void validate() const {
+            if (!std::isfinite(open) || !std::isfinite(high) || !std::isfinite(low) ||
+                !std::isfinite(close) || !std::isfinite(volume)) {
+                throw std::invalid_argument("Bar validation failed: non-finite value");
+            }
             if (high < low) {
                 throw std::invalid_argument("Bar validation failed: high < low");
             }

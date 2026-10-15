@@ -50,8 +50,12 @@ public:
         OrderId order_id = order->GetOrderId();
         orders_owned_[order_id] = order->GetSide();
 
-        bool is_taker = can_match_immediately(order);
-        auto trades   = orderbook_.AddOrder(order);
+        // Market orders always take liquidity; their price is only set once the
+        // book converts them, so can_match_immediately() would misreport them.
+        bool is_taker = order->GetOrderType() == OrderType::Market
+                     || can_match_immediately(order);
+        last_is_taker_ = is_taker;
+        auto trades    = orderbook_.AddOrder(order);
 
         for (const auto& trade : trades)
             update_position(trade, is_taker);
@@ -61,6 +65,37 @@ public:
 
         return trades;
     }
+
+    // Fill of one of our orders, reported by apply_trades().
+    struct OwnedFill {
+        OrderId  order_id;
+        Side     side;
+        Quantity quantity;
+        Price    price;   // cents
+    };
+
+    // Apply trades that happened outside execute_order() (e.g. a refreshed
+    // market-maker quote crossing one of our resting orders). Returns the fills
+    // that involved our orders so the caller can emit FillEvents.
+    std::vector<OwnedFill> apply_trades(const Trades& trades, bool is_taker = false) {
+        std::vector<OwnedFill> fills;
+        for (const auto& trade : trades) {
+            const auto& bid = trade.GetBidTrade();
+            const auto& ask = trade.GetAskTrade();
+            auto b = orders_owned_.find(bid.orderId_);
+            auto a = orders_owned_.find(ask.orderId_);
+            if (b != orders_owned_.end())
+                fills.push_back({bid.orderId_, Side::Buy,  bid.quantity_, bid.price_});
+            else if (a != orders_owned_.end())
+                fills.push_back({ask.orderId_, Side::Sell, ask.quantity_, ask.price_});
+            else
+                continue;
+            update_position(trade, is_taker);
+        }
+        return fills;
+    }
+
+    bool last_order_was_taker() const { return last_is_taker_; }
 
     void cancel_order(OrderId order_id) {
         orders_owned_.erase(order_id);
@@ -163,6 +198,7 @@ private:
     std::map<std::string, double>       avg_prices_;
     std::unordered_map<OrderId, Side>   orders_owned_;
 
+    bool                last_is_taker_ = false;
     double              realized_pnl_;
     double              total_fees_;
     std::vector<double> closed_trade_pnls_;
