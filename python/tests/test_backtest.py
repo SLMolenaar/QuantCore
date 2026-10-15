@@ -369,3 +369,9 @@ def test_strategy_portfolio_outlives_engine():
     del eng
     gc.collect()
     assert p.get_cash() == cash
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_bar_rejects_non_finite(bad):
+    with pytest.raises(ValueError):
+        qc.BarData("A", 1, 100, 101, 99, bad, 1e6)

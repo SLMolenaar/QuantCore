@@ -229,6 +229,18 @@ TEST_F(OrderbookTest, CancelExistingOrder) {
     EXPECT_EQ(orderbook_->Size(), 0);
 }
 
+TEST_F(OrderbookTest, CancelPreservesTimePriority) {
+    // Regression: cancel used swap-and-pop, which moved the last order to the front.
+    orderbook_->AddOrder(create_sell_order(1, 10000, 100));
+    orderbook_->AddOrder(create_sell_order(2, 10000, 100));
+    orderbook_->AddOrder(create_sell_order(3, 10000, 100));
+    orderbook_->CancelOrder(1);
+
+    auto trades = orderbook_->AddOrder(create_buy_order(4, 10000, 100));
+    ASSERT_EQ(trades.size(), 1);
+    EXPECT_EQ(trades[0].GetAskTrade().orderId_, 2);
+}
+
 TEST_F(OrderbookTest, CancelNonExistentOrder) {
     EXPECT_NO_THROW(orderbook_->CancelOrder(999));
     EXPECT_EQ(orderbook_->Size(), 0);
