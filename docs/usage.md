@@ -543,6 +543,19 @@ engine.set_fill_mode(qc.FillMode.NEXT_BAR_OPEN)          # direct engine use
 config = BacktestConfig(fill_mode='next_bar_open')       # optimisation / walk-forward
 ```
 
+**Pending orders and `has_position()`.** Under `next_bar_open`, a signal's order is still pending when the next `on_data` runs, so `has_position()` and `get_position()` do not yet reflect it. A strategy that gates entries and exits on `has_position()` will see the stale state and can send the same signal again. For a pending exit, the second `SELL` fills after the position is flat and opens an unintended short. Track your own intended state instead:
+
+```python
+if fast > slow and not self.long:
+    self.long = True
+    self.generate_signal(sym, qc.SignalType.BUY, 1.0, event.timestamp_ns)
+elif fast < slow and self.long:
+    self.long = False
+    self.generate_signal(sym, qc.SignalType.SELL, 1.0, event.timestamp_ns)
+```
+
+Reset that state in `reset()`. Under `same_bar_close` the fill happens before the next bar, so `has_position()` is reliable there.
+
 Use it for daily-bar strategies. On the bundled mean-reversion sample data the return drops from 11.3% to 7.5%. Notes: the default is unchanged so existing results reproduce; stop orders still execute against the triggering bar's book, which in this mode is centred on the open; and `get_total_pnl()` marks open positions to the book's mid (the last open), while `run()` and the equity curve use the last close.
 
 ### Market maker refresh interval
