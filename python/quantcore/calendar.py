@@ -79,9 +79,10 @@ class TradingCalendar:
         if exchange:
             try:
                 import pandas_market_calendars  # noqa: F401
-            except ImportError as exc:
+            except Exception as exc:   # ImportError, or incompatible with this Python
                 raise ImportError(
-                    "pandas_market_calendars is required for calendar filtering:\n"
+                    "pandas_market_calendars is required for calendar filtering "
+                    "(and needs Python >= 3.10 in recent releases):\n"
                     "  pip install pandas_market_calendars"
                 ) from exc
 

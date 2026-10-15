@@ -13,7 +13,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import quantcore as qc
 from quantcore.calendar import TradingCalendar, _ns_to_date_int
 
-pmc = pytest.importorskip("pandas_market_calendars", reason="pandas_market_calendars not installed")
+try:
+    import pandas_market_calendars as pmc
+except Exception as exc:   # not installed, or too new for this Python (import-time TypeError)
+    pytest.skip(f"pandas_market_calendars unavailable: {exc}", allow_module_level=True)
 
 SEC = 1_000_000_000
 DAY = 86_400 * SEC

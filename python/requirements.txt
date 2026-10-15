@@ -4,4 +4,5 @@ pandas>=2.0.0
 matplotlib>=3.7.0
 scipy
 pyarrow
-pandas_market_calendars>=4.0
+# recent releases use `X | None` annotations at import time and need Python >= 3.10
+pandas_market_calendars>=4.0; python_version >= "3.10"
